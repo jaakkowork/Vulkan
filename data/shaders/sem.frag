@@ -13,9 +13,9 @@ layout (location = 0) out vec4 outFragColor;
 
 void main()
 {
-    vec3 r = reflect( inEyePos, inNormal );
-    vec3 r2 = vec3(r.x, r.y, r.z + 1.0);
-    float m = 2.0 * length(r2);
-    vec2 vN = r.xy / m + .5;
+	vec3 r = reflect( inEyePos, inNormal );
+	vec3 r2 = vec3(r.x, r.y, r.z + 1.0);
+	float m = 2.0 * length(r2);
+	vec2 vN = r.xy / m + .5;
 	outFragColor = vec4( texture( matCap, vN ).rgb * (clamp(inColor.r * 2, 0.0, 1.0)), 1.0 );
 }

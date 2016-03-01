@@ -147,11 +147,18 @@ Demonstrates the use of multiple render targets to fill a G-Buffer for deferred 
 Deferred shading collects all values (color, normal, position) into different render targets in one pass thanks to multiple render targets, and then does all shading and lighting calculations based on these in scree space, thus allowing for much more light sources than traditional forward renderers.
 <br><br>
 
-## [Omnidirectional shadow mapping](shadowmap/)
+## [Shadowmapping](shadowmapping/)
+<img src="./screenshots/shadowmapping.png" height="96px" align="right">
+
+Shows how to implement directional dynamic shadows with a single shadow map in two passes. Pass one renders the scene from the light's point of view and copies the depth buffer to a depth texture.
+The second pass renders the scene from the camera's point of view using the depth texture to compare the depth value of the texels with the one stored in the depth texture to determine whether a texel is shadowed or not and also applies a PCF filter for smooth shadow borders.
+To avoid shadow artifacts the dynamic depth bias state ([vkCmdSetDepthBias](https://www.khronos.org/registry/vulkan/specs/1.0/man/html/vkCmdSetDepthBias.html)) is used to apply a constant and slope dept bias factor.
+
+## [Omnidirectional shadow mapping](shadowmappingomni/)
 <img src="./screenshots/shadow_omnidirectional.png" height="96px" align="right">
 
 Uses a dynamic 32 bit floating point cube map for a point light source that casts shadows in all directions (unlike projective shadow mapping).
-The cube map faces contain thee distances from the light sources, which are then used in the scene rendering pass to determine if the fragment is shadowed or not.
+The cube map faces contain the distances from the light sources, which are then used in the scene rendering pass to determine if the fragment is shadowed or not.
 <br><br>
 
 ## [Spherical environment mapping](sphericalenvmapping/)
@@ -218,13 +225,16 @@ Thanks to the authors of these libraries :
 
 And a huge thanks to the Vulkan Working Group, Vulkan Adivsory Panel, the fine people at LunarG and everyone from the different IHVs that helped me get the examples up and working on their hardware!
 
-## Attributions
+## Attributions / Licenses
+Please note that (some) models and textures use separate licenses. Please comply to these when redistributing or using them in your own projects :
 - Cubemap used in cubemap example by [Emil Persson(aka Humus)](http://www.humus.name/)
 - Armored knight model used in deferred example by [Gabriel Piacenti](http://opengameart.org/users/piacenti)
 - Voyager model by [NASA](http://nasa3d.arc.nasa.gov/models)
 - Astroboy COLLADA model copyright 2008 Sony Computer Entertainment Inc.
 - Bear mug model used in tessellation example by [Aare](http://opengameart.org/users/aare)
 - Textures used in some examples by [Hugues Muller](http://www.yughues-folio.com)
+- Vulkan scene model (and derived models) by [Dominic Agoro-Ombaka](http://www.agorodesign.com/) and [Sascha Willems](http://www.saschawillems.de)
+- Vulkan and the Vulkan logo are trademarks of the [Khronos Group Inc.](http://www.khronos.org)
 
 ## External resources
 - [LunarG Vulkan SDK](https://vulkan.lunarg.com)

@@ -220,18 +220,6 @@ VkPipelineShaderStageCreateInfo VulkanExampleBase::loadShader(const char * fileN
 	return shaderStage;
 }
 
-VkPipelineShaderStageCreateInfo VulkanExampleBase::loadShaderGLSL(const char * fileName, VkShaderStageFlagBits stage)
-{
-	VkPipelineShaderStageCreateInfo shaderStage = {};
-	shaderStage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-	shaderStage.stage = stage;
-	shaderStage.module = vkTools::loadShaderGLSL(fileName, device, stage);
-	shaderStage.pName = "main"; // todo : make param
-	assert(shaderStage.module != NULL);
-	shaderModules.push_back(shaderStage.module);
-	return shaderStage;
-}
-
 VkBool32 VulkanExampleBase::createBuffer(
 	VkBufferUsageFlags usage, 
 	VkDeviceSize size, 
@@ -424,6 +412,21 @@ void VulkanExampleBase::submitPostPresentBarrier(VkImage image)
 	assert(!vkRes);
 }
 
+VkSubmitInfo VulkanExampleBase::prepareSubmitInfo(
+	std::vector<VkCommandBuffer> commandBuffers, 
+	VkPipelineStageFlags *pipelineStages)
+{
+	VkSubmitInfo submitInfo = vkTools::initializers::submitInfo();
+	submitInfo.pWaitDstStageMask = pipelineStages;
+	submitInfo.waitSemaphoreCount = 1;
+	submitInfo.pWaitSemaphores = &semaphores.presentComplete;
+	submitInfo.commandBufferCount = commandBuffers.size();
+	submitInfo.pCommandBuffers = commandBuffers.data();
+	submitInfo.signalSemaphoreCount = 1;
+	submitInfo.pSignalSemaphores = &semaphores.renderComplete;
+	return submitInfo;
+}
+
 VulkanExampleBase::VulkanExampleBase(bool enableValidation)
 {
 	// Check for validation command line flag
@@ -484,6 +487,9 @@ VulkanExampleBase::~VulkanExampleBase()
 	}
 
 	vkDestroyCommandPool(device, cmdPool, nullptr);
+
+	vkDestroySemaphore(device, semaphores.presentComplete, nullptr);
+	vkDestroySemaphore(device, semaphores.renderComplete, nullptr);
 
 	vkDestroyDevice(device, nullptr); 
 
@@ -570,6 +576,27 @@ void VulkanExampleBase::initVulkan(bool enableValidation)
 	assert(validDepthFormat);
 
 	swapChain.connect(instance, physicalDevice, device);
+
+	// Create synchronization objects
+	VkSemaphoreCreateInfo semaphoreCreateInfo = vkTools::initializers::semaphoreCreateInfo();
+	// Create a semaphore used to synchronize image presentation
+	// Ensures that the image is displayed before we start submitting new commands to the queu
+	err = vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphores.presentComplete);
+	assert(!err);
+	// Create a semaphore used to synchronize command submission
+	// Ensures that the image is not presented until all commands have been sumbitted and executed
+	err = vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphores.renderComplete);
+	assert(!err);
+
+	// Set up submit info structure
+	// Semaphores will stay the same during application lifetime
+	// Command buffer submission info is set by each example
+	submitInfo = vkTools::initializers::submitInfo();
+	submitInfo.pWaitDstStageMask = &submitPipelineStages;
+	submitInfo.waitSemaphoreCount = 1;
+	submitInfo.pWaitSemaphores = &semaphores.presentComplete;
+	submitInfo.signalSemaphoreCount = 1;
+	submitInfo.pSignalSemaphores = &semaphores.renderComplete;
 }
 
 #ifdef _WIN32 
@@ -736,6 +763,7 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 			exit(0);
 			break;
 		}
+		keyPressed((uint32_t)wParam);
 		break;
 	case WM_RBUTTONDOWN:
 	case WM_LBUTTONDOWN:
@@ -766,8 +794,7 @@ void VulkanExampleBase::handleMessages(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
 #else
 
-// Linux : Setup window 
-// TODO : Not finished...
+// Set up a window using XCB and request event types
 xcb_window_t VulkanExampleBase::setupWindow()
 {
 	uint32_t value_mask, value_list[32];
@@ -776,7 +803,8 @@ xcb_window_t VulkanExampleBase::setupWindow()
 
 	value_mask = XCB_CW_BACK_PIXEL | XCB_CW_EVENT_MASK;
 	value_list[0] = screen->black_pixel;
-	value_list[1] = XCB_EVENT_MASK_KEY_RELEASE |
+	value_list[1] = 
+		XCB_EVENT_MASK_KEY_RELEASE |
 		XCB_EVENT_MASK_EXPOSURE |
 		XCB_EVENT_MASK_STRUCTURE_NOTIFY |
 		XCB_EVENT_MASK_POINTER_MOTION |
@@ -879,11 +907,10 @@ void VulkanExampleBase::handleEvent(const xcb_generic_event_t *event)
 	break;
 	case XCB_KEY_RELEASE:
 	{
-		const xcb_key_release_event_t *key =
-			(const xcb_key_release_event_t *)event;
-
-		if (key->detail == 0x9)
+		const xcb_key_release_event_t *keyEvent = (const xcb_key_release_event_t *)event;
+		if (keyEvent->detail == 0x9)
 			quit = true;
+		keyPressed(keyEvent->detail);
 	}
 	break;
 	case XCB_DESTROY_NOTIFY:
@@ -897,7 +924,12 @@ void VulkanExampleBase::handleEvent(const xcb_generic_event_t *event)
 
 void VulkanExampleBase::viewChanged()
 {
-	// For overriding on derived class
+	// Can be overrdiden in derived class
+}
+
+void VulkanExampleBase::keyPressed(uint32_t keyCode)
+{
+	// Can be overriden in derived class
 }
 
 VkBool32 VulkanExampleBase::getMemoryType(uint32_t typeBits, VkFlags properties, uint32_t * typeIndex)

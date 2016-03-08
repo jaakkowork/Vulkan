@@ -1,7 +1,7 @@
 /*
 * Assorted commonly used Vulkan helper functions
 *
-* Copyright (C) 2015 by Sascha Willems - www.saschawillems.de
+* Copyright (C) 2016 by Sascha Willems - www.saschawillems.de
 *
 * This code is licensed under the MIT license (MIT) (http://opensource.org/licenses/MIT)
 */
@@ -460,14 +460,21 @@ VkFramebufferCreateInfo vkTools::initializers::framebufferCreateInfo()
 	return framebufferCreateInfo;
 }
 
-VkSemaphoreCreateInfo vkTools::initializers::semaphoreCreateInfo(
-	VkSemaphoreCreateFlags flags)
+VkSemaphoreCreateInfo vkTools::initializers::semaphoreCreateInfo()
 {
 	VkSemaphoreCreateInfo semaphoreCreateInfo = {};
 	semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
 	semaphoreCreateInfo.pNext = NULL;
-	semaphoreCreateInfo.flags = flags;
+	semaphoreCreateInfo.flags = 0;
 	return semaphoreCreateInfo;
+}
+
+VkFenceCreateInfo vkTools::initializers::fenceCreateInfo(VkFenceCreateFlags flags)
+{
+	VkFenceCreateInfo fenceCreateInfo = {};
+	fenceCreateInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+	fenceCreateInfo.flags = flags;
+	return fenceCreateInfo;
 }
 
 VkSubmitInfo vkTools::initializers::submitInfo()

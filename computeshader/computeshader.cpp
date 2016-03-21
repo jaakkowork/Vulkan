@@ -13,6 +13,7 @@
 #include <vector>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -101,10 +102,10 @@ public:
 		vkFreeCommandBuffers(device, cmdPool, 1, &computeCmdBuffer);
 
 		textureLoader->destroyTexture(textureColorMap);
+		textureLoader->destroyTexture(textureComputeTarget);
 	}
 
-	// Prepare an empty texture as the blit target from 
-	// the offscreen framebuffer
+	// Prepare a texture target that is used to store compute shader calculations
 	void prepareTextureTarget(vkTools::VulkanTexture *tex, uint32_t width, uint32_t height, VkFormat format)
 	{
 		VkFormatProperties formatProperties;
@@ -112,9 +113,8 @@ public:
 
 		// Get device properties for the requested texture format
 		vkGetPhysicalDeviceFormatProperties(physicalDevice, format, &formatProperties);
-		// Check if blit destination is supported for the requested format
-		// Only try for optimal tiling, linear tiling usually won't support blit as destination anyway
-		assert(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_BLIT_DST_BIT);
+		// Check if requested image format supports image storage operations
+		assert(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
 
 		// Prepare blit target texture
 		tex->width = width;
@@ -128,8 +128,10 @@ public:
 		imageCreateInfo.arrayLayers = 1;
 		imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
 		imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-		// Texture will be sampled in a shader and is also the blit destination
-		imageCreateInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+		// Image will be sampled in the fragment shader and used as storage target in the compute shader
+		imageCreateInfo.usage = 
+			VK_IMAGE_USAGE_SAMPLED_BIT | 
+			VK_IMAGE_USAGE_STORAGE_BIT;
 		imageCreateInfo.flags = 0;
 
 		VkMemoryAllocateInfo memAllocInfo = vkTools::initializers::memoryAllocateInfo();
@@ -182,7 +184,9 @@ public:
 		textureLoader->loadTexture(
 			"./../data/textures/igor_and_pal_rgba.ktx", 
 			VK_FORMAT_R8G8B8A8_UNORM, 
-			&textureColorMap);
+			&textureColorMap,
+			false,
+			VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT);
 	}
 
 	void buildCommandBuffers()
@@ -410,7 +414,10 @@ public:
 		std::vector<VkDescriptorPoolSize> poolSizes =
 		{
 			vkTools::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 2),
+			// Graphics pipeline uses image samplers for display
 			vkTools::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4),
+			// Compute pipeline uses storage images image loads and stores
+			vkTools::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2),
 		};
 
 		VkDescriptorPoolCreateInfo descriptorPoolInfo =
@@ -629,12 +636,12 @@ public:
 		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings = {
 			// Binding 0 : Sampled image (read)
 			vkTools::initializers::descriptorSetLayoutBinding(
-				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 				VK_SHADER_STAGE_COMPUTE_BIT,
 				0),
 			// Binding 1 : Sampled image (write)
 			vkTools::initializers::descriptorSetLayoutBinding(
-				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 				VK_SHADER_STAGE_COMPUTE_BIT,
 				1),
 		};
@@ -675,12 +682,12 @@ public:
 		std::vector<VkDescriptorImageInfo> computeTexDescriptors =
 		{
 			vkTools::initializers::descriptorImageInfo(
-			textureColorMap.sampler,
+				VK_NULL_HANDLE,
 				textureColorMap.view,
 				VK_IMAGE_LAYOUT_GENERAL),
 
 			vkTools::initializers::descriptorImageInfo(
-				textureComputeTarget.sampler,
+				VK_NULL_HANDLE,
 				textureComputeTarget.view,
 				VK_IMAGE_LAYOUT_GENERAL)
 		};
@@ -689,14 +696,14 @@ public:
 		{
 			// Binding 0 : Sampled image (read)
 			vkTools::initializers::writeDescriptorSet(
-			computeDescriptorSet,
-				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				computeDescriptorSet,
+				VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 				0,
 				&computeTexDescriptors[0]),
 			// Binding 1 : Sampled image (write)
 			vkTools::initializers::writeDescriptorSet(
 				computeDescriptorSet,
-				VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+				VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
 				1,
 				&computeTexDescriptors[1])
 		};
@@ -743,14 +750,14 @@ public:
 	{
 		// Vertex shader
 		glm::mat4 viewMatrix = glm::mat4();
-		uboVS.projection = glm::perspective(deg_to_rad(60.0f), (float)width*0.5f / (float)height, 0.1f, 256.0f);
+		uboVS.projection = glm::perspective(glm::radians(60.0f), (float)width*0.5f / (float)height, 0.1f, 256.0f);
 		viewMatrix = glm::translate(viewMatrix, glm::vec3(0.0f, 0.0f, zoom));
 
 		uboVS.model = glm::mat4();
 		uboVS.model = viewMatrix * glm::translate(uboVS.model, glm::vec3(0, 0, 0));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		uint8_t *pData;
 		VkResult err = vkMapMemory(device, uniformDataVS.memory, 0, sizeof(uboVS), 0, (void **)&pData);

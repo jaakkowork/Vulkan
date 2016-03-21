@@ -13,6 +13,7 @@
 #include <vector>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -194,6 +195,7 @@ public:
 		imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
 		imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 		imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
 		imageCreateInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
 
 		VkMemoryAllocateInfo memAllocInfo = vkTools::initializers::memoryAllocateInfo();
@@ -230,12 +232,18 @@ public:
 		assert(!err);
 
 		// Image barrier for optimal image (target)
+		VkImageSubresourceRange subresourceRange = {};
+		subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		subresourceRange.baseMipLevel = 0;
+		subresourceRange.levelCount = 1;
+		subresourceRange.layerCount = 6;
 		vkTools::setImageLayout(
 			cmdBuffer,
 			shadowCubeMap.image,
 			VK_IMAGE_ASPECT_COLOR_BIT,
-			VK_IMAGE_LAYOUT_UNDEFINED,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+			VK_IMAGE_LAYOUT_PREINITIALIZED,
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			subresourceRange);
 
 		err = vkEndCommandBuffer(cmdBuffer);
 		assert(!err);
@@ -356,14 +364,14 @@ public:
 		// Depth stencil attachment
 		image.format = fbDepthFormat;
 		image.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-		image.initialLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+		image.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
 
 		VkImageViewCreateInfo depthStencilView = vkTools::initializers::imageViewCreateInfo();
 		depthStencilView.viewType = VK_IMAGE_VIEW_TYPE_2D;
 		depthStencilView.format = fbDepthFormat;
 		depthStencilView.flags = 0;
 		depthStencilView.subresourceRange = {};
-		depthStencilView.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+		depthStencilView.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
 		depthStencilView.subresourceRange.baseMipLevel = 0;
 		depthStencilView.subresourceRange.levelCount = 1;
 		depthStencilView.subresourceRange.baseArrayLayer = 0;
@@ -383,8 +391,8 @@ public:
 		vkTools::setImageLayout(
 			setupCmdBuffer, 
 			offScreenFrameBuf.depth.image, 
-			VK_IMAGE_ASPECT_DEPTH_BIT, 
-			VK_IMAGE_LAYOUT_UNDEFINED, 
+			VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
+			VK_IMAGE_LAYOUT_PREINITIALIZED,
 			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
 		flushSetupCommandBuffer();
@@ -437,24 +445,24 @@ public:
 		switch (faceIndex)
 		{
 		case 0: // POSITIVE_X
-			viewMatrix = glm::rotate(viewMatrix, deg_to_rad(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-			viewMatrix = glm::rotate(viewMatrix, deg_to_rad(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+			viewMatrix = glm::rotate(viewMatrix, glm::radians(90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+			viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 			break;
 		case 1:	// NEGATIVE_X
-			viewMatrix = glm::rotate(viewMatrix, deg_to_rad(-90), glm::vec3(0.0f, 1.0f, 0.0f));
-			viewMatrix = glm::rotate(viewMatrix, deg_to_rad(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+			viewMatrix = glm::rotate(viewMatrix, glm::radians(-90.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+			viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 			break;
 		case 2:	// POSITIVE_Y
-			viewMatrix = glm::rotate(viewMatrix, deg_to_rad(-90), glm::vec3(1.0f, 0.0f, 0.0f));
+			viewMatrix = glm::rotate(viewMatrix, glm::radians(-90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 			break;
 		case 3:	// NEGATIVE_Y
-			viewMatrix = glm::rotate(viewMatrix, deg_to_rad(90), glm::vec3(1.0f, 0.0f, 0.0f));
+			viewMatrix = glm::rotate(viewMatrix, glm::radians(90.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 			break;
 		case 4:	// POSITIVE_Z
-			viewMatrix = glm::rotate(viewMatrix, deg_to_rad(180), glm::vec3(1.0f, 0.0f, 0.0f));
+			viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 			break;
 		case 5:	// NEGATIVE_Z
-			viewMatrix = glm::rotate(viewMatrix, deg_to_rad(180), glm::vec3(0.0f, 0.0f, 1.0f));
+			viewMatrix = glm::rotate(viewMatrix, glm::radians(180.0f), glm::vec3(0.0f, 0.0f, 1.0f));
 			break;
 		}
 
@@ -480,7 +488,6 @@ public:
 		vkCmdDrawIndexed(offScreenCmdBuffer, meshes.scene.indexCount, 1, 0, 0, 0);
 
 		vkCmdEndRenderPass(offScreenCmdBuffer);
-
 		// Make sure color writes to the framebuffer are finished before using it as transfer source
 		vkTools::setImageLayout(
 			offScreenCmdBuffer,
@@ -517,14 +524,6 @@ public:
 			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 			1,
 			&copyRegion);
-
-		// Make sure transfer to cube map face is finished before sampling it in a shader
-		vkTools::setImageLayout(
-			offScreenCmdBuffer,
-			shadowCubeMap.image,
-			VK_IMAGE_ASPECT_COLOR_BIT,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
 
 		// Transform framebuffer color attachment back 
 		vkTools::setImageLayout(
@@ -571,10 +570,34 @@ public:
 			0);
 		vkCmdSetScissor(offScreenCmdBuffer, 0, 1, &scissor);
 
+		VkImageSubresourceRange subresourceRange = {};
+		subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		subresourceRange.baseMipLevel = 0;
+		subresourceRange.levelCount = 1;
+		subresourceRange.layerCount = 6;
+
+		// Change image layout for all cubemap faces to transfer destination
+		vkTools::setImageLayout(
+			offScreenCmdBuffer,
+			shadowCubeMap.image,
+			VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			subresourceRange);
+
 		for (uint32_t face = 0; face < 6; ++face)
 		{
 			updateCubeFace(face);
 		}
+
+		// Change image layout for all cubemap faces to shader read after they have been copied
+		vkTools::setImageLayout(
+			offScreenCmdBuffer,
+			shadowCubeMap.image,
+			VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+			subresourceRange);
 
 		err = vkEndCommandBuffer(offScreenCmdBuffer);
 		assert(!err);
@@ -986,13 +1009,13 @@ public:
 	void updateUniformBuffers()
 	{
 		// 3D scene
-		uboVSscene.projection = glm::perspective(deg_to_rad(45.0f), (float)width / (float)height, zNear, zFar);
+		uboVSscene.projection = glm::perspective(glm::radians(45.0f), (float)width / (float)height, zNear, zFar);
 		uboVSscene.view = glm::translate(glm::mat4(), glm::vec3(0.0f, 0.0f, displayCubeMap ? 0.0f : zoom));
 
 		uboVSscene.model = glm::mat4();
-		uboVSscene.model = glm::rotate(uboVSscene.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		uboVSscene.model = glm::rotate(uboVSscene.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		uboVSscene.model = glm::rotate(uboVSscene.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		uboVSscene.model = glm::rotate(uboVSscene.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		uboVSscene.model = glm::rotate(uboVSscene.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		uboVSscene.model = glm::rotate(uboVSscene.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		uboVSscene.lightPos = lightPos;
 
@@ -1005,8 +1028,8 @@ public:
 
 	void updateUniformBufferOffscreen()
 	{
-		lightPos.x = sin(deg_to_rad(timer * 360.0f)) * 1.0f;
-		lightPos.z = cos(deg_to_rad(timer * 360.0f)) * 1.0f;
+		lightPos.x = sin(glm::radians(timer * 360.0f)) * 1.0f;
+		lightPos.z = cos(glm::radians(timer * 360.0f)) * 1.0f;
 
 		uboOffscreenVS.projection = glm::perspective((float)(M_PI / 2.0), 1.0f, zNear, zFar);
 

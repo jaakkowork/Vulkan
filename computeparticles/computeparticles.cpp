@@ -13,6 +13,7 @@
 #include <vector>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -44,8 +45,6 @@ public:
 		// graphics pipelines in Vulkan
 		VkPipeline compute;
 	} pipelines;
-
-	int vertexBufferSize;
 
 	VkQueue computeQueue;
 	VkCommandBuffer computeCmdBuffer;
@@ -298,24 +297,54 @@ public:
 		VkResult err;
 		void *data;
 
+		struct StagingBuffer {
+			VkDeviceMemory memory;
+			VkBuffer buffer;
+		} stagingBuffer;
+
+		// Allocate and fill host-visible staging storage buffer object
+
 		// Allocate and fill storage buffer object
 		VkBufferCreateInfo vBufferInfo = 
 			vkTools::initializers::bufferCreateInfo(
-				VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, 
+				VK_BUFFER_USAGE_TRANSFER_SRC_BIT, 
 				storageBufferSize);
-		err = vkCreateBuffer(device, &vBufferInfo, nullptr, &computeStorageBuffer.buffer);
-		assert(!err);
-		vkGetBufferMemoryRequirements(device, computeStorageBuffer.buffer, &memReqs);
+		vkTools::checkResult(vkCreateBuffer(device, &vBufferInfo, nullptr, &stagingBuffer.buffer));
+		vkGetBufferMemoryRequirements(device, stagingBuffer.buffer, &memReqs);
 		memAlloc.allocationSize = memReqs.size;
 		getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, &memAlloc.memoryTypeIndex);
-		err = vkAllocateMemory(device, &memAlloc, nullptr, &computeStorageBuffer.memory);
-		assert(!err);
-		err = vkMapMemory(device, computeStorageBuffer.memory, 0, storageBufferSize, 0, &data);
-		assert(!err);
+		vkTools::checkResult(vkAllocateMemory(device, &memAlloc, nullptr, &stagingBuffer.memory));
+		vkTools::checkResult(vkMapMemory(device, stagingBuffer.memory, 0, storageBufferSize, 0, &data));
 		memcpy(data, particleBuffer.data(), storageBufferSize);
-		vkUnmapMemory(device, computeStorageBuffer.memory);
-		err = vkBindBufferMemory(device, computeStorageBuffer.buffer, computeStorageBuffer.memory, 0);
-		assert(!err);
+		vkUnmapMemory(device, stagingBuffer.memory);
+		vkTools::checkResult(vkBindBufferMemory(device, stagingBuffer.buffer, stagingBuffer.memory, 0));
+
+		// Allocate device local storage buffer ojbect
+		vBufferInfo.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+		vkTools::checkResult(vkCreateBuffer(device, &vBufferInfo, nullptr, &computeStorageBuffer.buffer));
+		vkGetBufferMemoryRequirements(device, computeStorageBuffer.buffer, &memReqs);
+		memAlloc.allocationSize = memReqs.size;
+		getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &memAlloc.memoryTypeIndex);
+		vkTools::checkResult(vkAllocateMemory(device, &memAlloc, nullptr, &computeStorageBuffer.memory));
+		vkTools::checkResult(vkBindBufferMemory(device, computeStorageBuffer.buffer, computeStorageBuffer.memory, 0));
+
+		// Copy from host to device
+		createSetupCommandBuffer();
+
+		VkBufferCopy copyRegion = {};
+		copyRegion.size = storageBufferSize;
+		vkCmdCopyBuffer(
+			setupCmdBuffer,
+			stagingBuffer.buffer,
+			computeStorageBuffer.buffer,
+			1,
+			&copyRegion);
+
+		flushSetupCommandBuffer();
+
+		// Destroy staging buffer
+		vkDestroyBuffer(device, stagingBuffer.buffer, nullptr);
+		vkFreeMemory(device, stagingBuffer.memory, nullptr);
 
 		computeStorageBuffer.descriptor.buffer = computeStorageBuffer.buffer;
 		computeStorageBuffer.descriptor.offset = 0;
@@ -635,7 +664,7 @@ public:
 	void updateUniformBuffers()
 	{
 		computeUbo.deltaT = frameTimer * 5.0f;
-		computeUbo.destX = sin(deg_to_rad(timer*360.0)) * 0.75f;
+		computeUbo.destX = sin(glm::radians(timer*360.0)) * 0.75f;
 		computeUbo.destY = 0;
 		uint8_t *pData;
 		VkResult err = vkMapMemory(device, uniformData.computeShader.ubo.memory, 0, sizeof(computeUbo), 0, (void **)&pData);

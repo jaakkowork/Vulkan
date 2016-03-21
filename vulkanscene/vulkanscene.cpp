@@ -17,6 +17,7 @@
 #include <vector>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/matrix_inverse.hpp>
@@ -538,7 +539,7 @@ public:
 
 	void updateUniformBuffers()
 	{
-		uboVS.projection = glm::perspective(deg_to_rad(60.0f), (float)width / (float)height, 0.1f, 256.0f);
+		uboVS.projection = glm::perspective(glm::radians(60.0f), (float)width / (float)height, 0.1f, 256.0f);
 
 		uboVS.view = glm::lookAt(
 			glm::vec3(0, 0, -zoom),
@@ -547,9 +548,9 @@ public:
 			);
 
 		uboVS.model = glm::mat4();
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		uboVS.normal = glm::inverseTranspose(uboVS.view * uboVS.model);
 

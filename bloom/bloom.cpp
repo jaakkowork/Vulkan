@@ -13,6 +13,7 @@
 #include <vector>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -198,6 +199,8 @@ public:
 	// the offscreen framebuffer
 	void prepareTextureTarget(vkTools::VulkanTexture *tex, uint32_t width, uint32_t height, VkFormat format)
 	{
+		createSetupCommandBuffer();
+
 		VkFormatProperties formatProperties;
 		VkResult err;
 
@@ -235,8 +238,7 @@ public:
 		err = vkBindImageMemory(device, tex->image, tex->deviceMemory, 0);
 		assert(!err);
 
-		// Transform image layout to transer destination
-		tex->imageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		tex->imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 		vkTools::setImageLayout(
 			setupCmdBuffer, 
 			tex->image,
@@ -271,6 +273,8 @@ public:
 		view.image = tex->image;
 		err = vkCreateImageView(device, &view, nullptr, &tex->view);
 		assert(!err);
+
+		flushSetupCommandBuffer();
 	}
 
 	// Prepare a new framebuffer for offscreen rendering
@@ -371,7 +375,7 @@ public:
 		vkTools::setImageLayout(
 			setupCmdBuffer,
 			frameBuf->depth.image, 
-			VK_IMAGE_ASPECT_DEPTH_BIT, 
+			VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 
 			VK_IMAGE_LAYOUT_UNDEFINED, 
 			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
@@ -1185,17 +1189,17 @@ public:
 	void updateUniformBuffersScene()
 	{
 		// UFO
-		ubos.fullscreen.projection = glm::perspective(deg_to_rad(45.0f), (float)width / (float)height, 0.1f, 256.0f);
+		ubos.fullscreen.projection = glm::perspective(glm::radians(45.0f), (float)width / (float)height, 0.1f, 256.0f);
 		glm::mat4 viewMatrix = glm::translate(glm::mat4(), glm::vec3(0.0f, -1.0f, zoom));
 
 		ubos.fullscreen.model = viewMatrix *
-			glm::translate(glm::mat4(), glm::vec3(sin(deg_to_rad(timer * 360.0f)) * 0.25f, 0.0f, cos(deg_to_rad(timer * 360.0f)) * 0.25f));
+			glm::translate(glm::mat4(), glm::vec3(sin(glm::radians(timer * 360.0f)) * 0.25f, 0.0f, cos(glm::radians(timer * 360.0f)) * 0.25f));
 
-		ubos.fullscreen.model = glm::rotate(ubos.fullscreen.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		ubos.fullscreen.model = glm::rotate(ubos.fullscreen.model, -sinf(deg_to_rad(timer * 360.0f)) * 0.15f, glm::vec3(1.0f, 0.0f, 0.0f));
-		ubos.fullscreen.model = glm::rotate(ubos.fullscreen.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		ubos.fullscreen.model = glm::rotate(ubos.fullscreen.model, deg_to_rad(timer * 360.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-		ubos.fullscreen.model = glm::rotate(ubos.fullscreen.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubos.fullscreen.model = glm::rotate(ubos.fullscreen.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		ubos.fullscreen.model = glm::rotate(ubos.fullscreen.model, -sinf(glm::radians(timer * 360.0f)) * 0.15f, glm::vec3(1.0f, 0.0f, 0.0f));
+		ubos.fullscreen.model = glm::rotate(ubos.fullscreen.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		ubos.fullscreen.model = glm::rotate(ubos.fullscreen.model, glm::radians(timer * 360.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		ubos.fullscreen.model = glm::rotate(ubos.fullscreen.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		uint8_t *pData;
 		VkResult err = vkMapMemory(device, uniformData.vsFullScreen.memory, 0, sizeof(ubos.fullscreen), 0, (void **)&pData);
@@ -1204,12 +1208,12 @@ public:
 		vkUnmapMemory(device, uniformData.vsFullScreen.memory);
 
 		// Skybox
-		ubos.skyBox.projection = glm::perspective(deg_to_rad(45.0f), (float)width / (float)height, 0.1f, 256.0f);
+		ubos.skyBox.projection = glm::perspective(glm::radians(45.0f), (float)width / (float)height, 0.1f, 256.0f);
 
 		ubos.skyBox.model = glm::mat4();
-		ubos.skyBox.model = glm::rotate(ubos.skyBox.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		ubos.skyBox.model = glm::rotate(ubos.skyBox.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		ubos.skyBox.model = glm::rotate(ubos.skyBox.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubos.skyBox.model = glm::rotate(ubos.skyBox.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		ubos.skyBox.model = glm::rotate(ubos.skyBox.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		ubos.skyBox.model = glm::rotate(ubos.skyBox.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		err = vkMapMemory(device, uniformData.vsSkyBox.memory, 0, sizeof(ubos.skyBox), 0, (void **)&pData);
 		assert(!err);

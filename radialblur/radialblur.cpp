@@ -13,6 +13,7 @@
 #include <vector>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -174,6 +175,8 @@ public:
 	// the offscreen framebuffer
 	void prepareTextureTarget(vkTools::VulkanTexture *tex, uint32_t width, uint32_t height, VkFormat format)
 	{
+		createSetupCommandBuffer();
+
 		VkFormatProperties formatProperties;
 		VkResult err;
 
@@ -195,6 +198,8 @@ public:
 		imageCreateInfo.arrayLayers = 1;
 		imageCreateInfo.samples = VK_SAMPLE_COUNT_1_BIT;
 		imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+		imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
 		// Texture will be sampled in a shader and is also the blit destination
 		imageCreateInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
@@ -211,13 +216,13 @@ public:
 		err = vkBindImageMemory(device, tex->image, tex->deviceMemory, 0);
 		assert(!err);
 
-		// Transform image layout to transer destination
-		tex->imageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		// Transform image layout to transfer destination
+		tex->imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 		vkTools::setImageLayout(
 			setupCmdBuffer,
 			tex->image,
 			VK_IMAGE_ASPECT_COLOR_BIT,
-			VK_IMAGE_LAYOUT_UNDEFINED,
+			VK_IMAGE_LAYOUT_PREINITIALIZED,
 			tex->imageLayout);
 
 		// Create sampler
@@ -247,6 +252,8 @@ public:
 		view.image = tex->image;
 		err = vkCreateImageView(device, &view, nullptr, &tex->view);
 		assert(!err);
+
+		flushSetupCommandBuffer();
 	}
 
 	// Prepare a new framebuffer for offscreen rendering
@@ -347,7 +354,7 @@ public:
 		vkTools::setImageLayout(
 			setupCmdBuffer, 
 			offScreenFrameBuf.depth.image, 
-			VK_IMAGE_ASPECT_DEPTH_BIT, 
+			VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT, 
 			VK_IMAGE_LAYOUT_UNDEFINED, 
 			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
@@ -980,15 +987,15 @@ public:
 	// Update uniform buffers for rendering the 3D scene
 	void updateUniformBuffersScene()
 	{
-		uboQuadVS.projection = glm::perspective(deg_to_rad(45.0f), (float)width / (float)height, 1.0f, 256.0f);
+		uboQuadVS.projection = glm::perspective(glm::radians(45.0f), (float)width / (float)height, 1.0f, 256.0f);
 		glm::mat4 viewMatrix = glm::translate(glm::mat4(), glm::vec3(0.0f, 0.0f, zoom));
 
 		uboQuadVS.model = glm::mat4();
 		uboQuadVS.model = viewMatrix * glm::translate(uboQuadVS.model, glm::vec3(0, 0, 0));
-		uboQuadVS.model = glm::rotate(uboQuadVS.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		uboQuadVS.model = glm::rotate(uboQuadVS.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		uboQuadVS.model = glm::rotate(uboQuadVS.model, deg_to_rad(timer * 360.0f), glm::vec3(0.0f, 1.0f, 0.0f));
-		uboQuadVS.model = glm::rotate(uboQuadVS.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		uboQuadVS.model = glm::rotate(uboQuadVS.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		uboQuadVS.model = glm::rotate(uboQuadVS.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		uboQuadVS.model = glm::rotate(uboQuadVS.model, glm::radians(timer * 360.0f), glm::vec3(0.0f, 1.0f, 0.0f));
+		uboQuadVS.model = glm::rotate(uboQuadVS.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		uint8_t *pData;
 		VkResult err = vkMapMemory(device, uniformData.vsQuad.memory, 0, sizeof(uboQuadVS), 0, (void **)&pData);

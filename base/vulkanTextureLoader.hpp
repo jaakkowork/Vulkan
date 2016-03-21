@@ -61,14 +61,20 @@ namespace vkTools
 		// Load a 2D texture
 		void loadTexture(const char* filename, VkFormat format, VulkanTexture *texture, bool forceLinear)
 		{
+			loadTexture(filename, format, texture, false, VK_IMAGE_USAGE_SAMPLED_BIT);
+		}
+
+		// Load a 2D texture
+		void loadTexture(const char* filename, VkFormat format, VulkanTexture *texture, bool forceLinear, VkImageUsageFlags imageUsageFlags)
+		{
+			std::cout << "Loading \"" << filename << "\"..." << std::endl;
+
 			gli::texture2D tex2D(gli::load(filename));
 			assert(!tex2D.empty());
 
 			texture->width = (uint32_t)tex2D[0].dimensions().x;
 			texture->height = (uint32_t)tex2D[0].dimensions().y;
 			texture->mipLevels = tex2D.levels();
-
-			VkResult err;
 
 			// Get device properites for the requested texture format
 			VkFormatProperties formatProperties;
@@ -91,14 +97,14 @@ namespace vkTools
 			imageCreateInfo.tiling = VK_IMAGE_TILING_LINEAR;
 			imageCreateInfo.usage = (useStaging) ? VK_IMAGE_USAGE_TRANSFER_SRC_BIT : VK_IMAGE_USAGE_SAMPLED_BIT;
 			imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+			imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
 
 			VkMemoryAllocateInfo memAllocInfo = vkTools::initializers::memoryAllocateInfo();
 			VkMemoryRequirements memReqs;
 
 			// Use a separate command buffer for texture loading
 			VkCommandBufferBeginInfo cmdBufInfo = vkTools::initializers::commandBufferBeginInfo();
-			err = vkBeginCommandBuffer(cmdBuffer, &cmdBufInfo);
-			assert(!err);
+			vkTools::checkResult(vkBeginCommandBuffer(cmdBuffer, &cmdBufInfo));
 
 			if (useStaging)
 			{
@@ -118,16 +124,13 @@ namespace vkTools
 					imageCreateInfo.extent.height = tex2D[level].dimensions().y;
 					imageCreateInfo.extent.depth = 1;
 
-					err = vkCreateImage(device, &imageCreateInfo, nullptr, &mipLevels[level].image);
-					assert(!err);
+					vkTools::checkResult(vkCreateImage(device, &imageCreateInfo, nullptr, &mipLevels[level].image));
 
 					vkGetImageMemoryRequirements(device, mipLevels[level].image, &memReqs);
 					memAllocInfo.allocationSize = memReqs.size;
 					getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, &memAllocInfo.memoryTypeIndex);
-					err = vkAllocateMemory(device, &memAllocInfo, nullptr, &mipLevels[level].memory);
-					assert(!err);
-					err = vkBindImageMemory(device, mipLevels[level].image, mipLevels[level].memory, 0);
-					assert(!err);
+					vkTools::checkResult(vkAllocateMemory(device, &memAllocInfo, nullptr, &mipLevels[level].memory));
+					vkTools::checkResult(vkBindImageMemory(device, mipLevels[level].image, mipLevels[level].memory, 0));
 
 					VkImageSubresource subRes = {};
 					subRes.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -136,9 +139,7 @@ namespace vkTools
 					void *data;
 
 					vkGetImageSubresourceLayout(device, mipLevels[level].image, &subRes, &subResLayout);
-					assert(!err);
-					err = vkMapMemory(device, mipLevels[level].memory, 0, memReqs.size, 0, &data);
-					assert(!err);
+					vkTools::checkResult(vkMapMemory(device, mipLevels[level].memory, 0, memReqs.size, 0, &data));
 					memcpy(data, tex2D[level].data(), tex2D[level].size());
 					vkUnmapMemory(device, mipLevels[level].memory);
 
@@ -148,28 +149,31 @@ namespace vkTools
 						cmdBuffer,
 						mipLevels[level].image,
 						VK_IMAGE_ASPECT_COLOR_BIT,
-						VK_IMAGE_LAYOUT_UNDEFINED,
+						VK_IMAGE_LAYOUT_PREINITIALIZED,
 						VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 				}
 
 				// Setup texture as blit target with optimal tiling
 				imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-				imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+				imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | imageUsageFlags;
 				imageCreateInfo.mipLevels = texture->mipLevels;
 				imageCreateInfo.extent = { texture->width, texture->height, 1 };
 
-				err = vkCreateImage(device, &imageCreateInfo, nullptr, &texture->image);
-				assert(!err);
+				vkTools::checkResult(vkCreateImage(device, &imageCreateInfo, nullptr, &texture->image));
 
 				vkGetImageMemoryRequirements(device, texture->image, &memReqs);
 
 				memAllocInfo.allocationSize = memReqs.size;
 
 				getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &memAllocInfo.memoryTypeIndex);
-				err = vkAllocateMemory(device, &memAllocInfo, nullptr, &texture->deviceMemory);
-				assert(!err);
-				err = vkBindImageMemory(device, texture->image, texture->deviceMemory, 0);
-				assert(!err);
+				vkTools::checkResult(vkAllocateMemory(device, &memAllocInfo, nullptr, &texture->deviceMemory));
+				vkTools::checkResult(vkBindImageMemory(device, texture->image, texture->deviceMemory, 0));
+
+				VkImageSubresourceRange subresourceRange = {};
+				subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+				subresourceRange.baseMipLevel = 0;
+				subresourceRange.levelCount = texture->mipLevels;
+				subresourceRange.layerCount = 1;
 
 				// Image barrier for optimal image (target)
 				// Optimal image will be used as destination for the copy
@@ -177,8 +181,9 @@ namespace vkTools
 					cmdBuffer,
 					texture->image,
 					VK_IMAGE_ASPECT_COLOR_BIT,
-					VK_IMAGE_LAYOUT_UNDEFINED,
-					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+					VK_IMAGE_LAYOUT_PREINITIALIZED,
+					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+					subresourceRange);
 
 				// Copy mip levels one by one
 				for (uint32_t level = 0; level < texture->mipLevels; ++level)
@@ -201,7 +206,7 @@ namespace vkTools
 
 					copyRegion.extent.width = tex2D[level].dimensions().x;
 					copyRegion.extent.height = tex2D[level].dimensions().y;
-					copyRegion.extent.depth = 1;
+					copyRegion.extent.depth = 0;
 
 					// Put image copy into command buffer
 					vkCmdCopyImage(
@@ -212,41 +217,42 @@ namespace vkTools
 						VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 						1, 
 						&copyRegion);
-
-					// Change texture image layout to shader read after the copy
-					texture->imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-					setImageLayout(
-						cmdBuffer,
-						texture->image,
-						VK_IMAGE_ASPECT_COLOR_BIT,
-						VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-						texture->imageLayout);
 				}
 
-				// Submit command buffer containing copy and image layout commands
-				err = vkEndCommandBuffer(cmdBuffer);
-				assert(!err);
+				// Change texture image layout to shader read for all mip levels after the copy
+				texture->imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+				setImageLayout(
+					cmdBuffer,
+					texture->image,
+					VK_IMAGE_ASPECT_COLOR_BIT,
+					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+					texture->imageLayout,
+					subresourceRange);
 
-				VkFence nullFence = { VK_NULL_HANDLE };
+				// Submit command buffer containing copy and image layout commands
+				vkTools::checkResult(vkEndCommandBuffer(cmdBuffer));
+
+				// Create a fence to make sure that the copies have finished before continuing
+				VkFence copyFence;
+				VkFenceCreateInfo fenceCreateInfo = vkTools::initializers::fenceCreateInfo(VK_FLAGS_NONE);
+				vkTools::checkResult(vkCreateFence(device, &fenceCreateInfo, nullptr, &copyFence));
 
 				VkSubmitInfo submitInfo = vkTools::initializers::submitInfo();
-				submitInfo.waitSemaphoreCount = 0;
 				submitInfo.commandBufferCount = 1;
 				submitInfo.pCommandBuffers = &cmdBuffer;
 
-				err = vkQueueSubmit(queue, 1, &submitInfo, nullFence);
-				assert(!err);
+				vkTools::checkResult(vkQueueSubmit(queue, 1, &submitInfo, copyFence));
 
-				err = vkQueueWaitIdle(queue);
-				assert(!err);
+				vkTools::checkResult(vkWaitForFences(device, 1, &copyFence, VK_TRUE, DEFAULT_FENCE_TIMEOUT));
 
-				// Clean up linear images 
-				// No longer required after mip levels
-				// have been transformed over to optimal tiling
-				for (auto& level : mipLevels)
+				vkDestroyFence(device, copyFence, nullptr);
+
+				// Destroy linear images used as staging buffers after copies have been finished
+				//for (auto& level : mipLevels)
+				for (uint32_t i = 0; i < mipLevels.size(); i++)
 				{
-					vkDestroyImage(device, level.image, nullptr);
-					vkFreeMemory(device, level.memory, nullptr);
+					vkDestroyImage(device, mipLevels[i].image, nullptr);
+					vkFreeMemory(device, mipLevels[i].memory, nullptr);
 				}
 			}
 			else
@@ -262,8 +268,7 @@ namespace vkTools
 				VkDeviceMemory mappableMemory;
 
 				// Load mip map level 0 to linear tiling image
-				err = vkCreateImage(device, &imageCreateInfo, nullptr, &mappableImage);
-				assert(!err);
+				vkTools::checkResult(vkCreateImage(device, &imageCreateInfo, nullptr, &mappableImage));
 
 				// Get memory requirements for this image 
 				// like size and alignment
@@ -275,12 +280,10 @@ namespace vkTools
 				getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, &memAllocInfo.memoryTypeIndex);
 
 				// Allocate host memory
-				err = vkAllocateMemory(device, &memAllocInfo, nullptr, &mappableMemory);
-				assert(!err);
+				vkTools::checkResult(vkAllocateMemory(device, &memAllocInfo, nullptr, &mappableMemory));
 
 				// Bind allocated image for use
-				err = vkBindImageMemory(device, mappableImage, mappableMemory, 0);
-				assert(!err);
+				vkTools::checkResult(vkBindImageMemory(device, mappableImage, mappableMemory, 0));
 
 				// Get sub resource layout
 				// Mip map count, array layer, etc.
@@ -294,11 +297,9 @@ namespace vkTools
 				// Get sub resources layout 
 				// Includes row pitch, size offsets, etc.
 				vkGetImageSubresourceLayout(device, mappableImage, &subRes, &subResLayout);
-				assert(!err);
 
 				// Map image memory
-				err = vkMapMemory(device, mappableMemory, 0, memReqs.size, 0, &data);
-				assert(!err);
+				vkTools::checkResult(vkMapMemory(device, mappableMemory, 0, memReqs.size, 0, &data));
 
 				// Copy image data into memory
 				memcpy(data, tex2D[subRes.mipLevel].data(), tex2D[subRes.mipLevel].size());
@@ -316,12 +317,11 @@ namespace vkTools
 					cmdBuffer,
 					texture->image, 
 					VK_IMAGE_ASPECT_COLOR_BIT, 
-					VK_IMAGE_LAYOUT_UNDEFINED, 
+					VK_IMAGE_LAYOUT_PREINITIALIZED, 
 					texture->imageLayout);
 
 				// Submit command buffer containing copy and image layout commands
-				err = vkEndCommandBuffer(cmdBuffer);
-				assert(!err);
+				vkTools::checkResult(vkEndCommandBuffer(cmdBuffer));
 
 				VkFence nullFence = { VK_NULL_HANDLE };
 
@@ -330,11 +330,8 @@ namespace vkTools
 				submitInfo.commandBufferCount = 1;
 				submitInfo.pCommandBuffers = &cmdBuffer;
 
-				err = vkQueueSubmit(queue, 1, &submitInfo, nullFence);
-				assert(!err);
-
-				err = vkQueueWaitIdle(queue);
-				assert(!err);
+				vkTools::checkResult(vkQueueSubmit(queue, 1, &submitInfo, nullFence));
+				vkTools::checkResult(vkQueueWaitIdle(queue));
 			}
 
 			// Create sampler
@@ -355,9 +352,8 @@ namespace vkTools
 			sampler.maxAnisotropy = 8;
 			sampler.anisotropyEnable = VK_TRUE;
 			sampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-			err = vkCreateSampler(device, &sampler, nullptr, &texture->sampler);
-			assert(!err);
-
+			vkTools::checkResult(vkCreateSampler(device, &sampler, nullptr, &texture->sampler));
+			
 			// Create image view
 			// Textures are not directly accessed by the shaders and
 			// are abstracted by image views containing additional
@@ -374,8 +370,7 @@ namespace vkTools
 			// Only set mip map count if optimal tiling is used
 			view.subresourceRange.levelCount = (useStaging) ? texture->mipLevels : 1;
 			view.image = texture->image;
-			err = vkCreateImageView(device, &view, nullptr, &texture->view);
-			assert(!err);
+			vkTools::checkResult(vkCreateImageView(device, &view, nullptr, &texture->view));
 		}
 
 		// Clean up vulkan resources used by a texture object
@@ -403,8 +398,7 @@ namespace vkTools
 			cmdBufInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
 			cmdBufInfo.commandBufferCount = 1;
 
-			VkResult vkRes = vkAllocateCommandBuffers(device, &cmdBufInfo, &cmdBuffer);
-			assert(vkRes == VK_SUCCESS);
+			vkTools:checkResult(vkAllocateCommandBuffers(device, &cmdBufInfo, &cmdBuffer));
 		}
 
 		~VulkanTextureLoader()
@@ -416,7 +410,6 @@ namespace vkTools
 		void loadCubemap(const char* filename, VkFormat format, VulkanTexture *texture)
 		{
 			VkFormatProperties formatProperties;
-			VkResult err;
 
 			gli::textureCube texCube(gli::load(filename));
 			assert(!texCube.empty());
@@ -437,7 +430,7 @@ namespace vkTools
 			imageCreateInfo.tiling = VK_IMAGE_TILING_LINEAR;
 			imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 			imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-			imageCreateInfo.flags = 0;
+			imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
 
 			VkMemoryAllocateInfo memAllocInfo = vkTools::initializers::memoryAllocateInfo();
 			VkMemoryRequirements memReqs;
@@ -447,26 +440,20 @@ namespace vkTools
 				VkDeviceMemory memory;
 			} cubeFace[6];
 
-			VkCommandBufferBeginInfo cmdBufInfo = {};
-			cmdBufInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-			cmdBufInfo.pNext = NULL;
+			VkCommandBufferBeginInfo cmdBufInfo = vkTools::initializers::commandBufferBeginInfo();
 
-			err = vkBeginCommandBuffer(cmdBuffer, &cmdBufInfo);
-			assert(!err);
+			vkTools::checkResult(vkBeginCommandBuffer(cmdBuffer, &cmdBufInfo));
 
 			// Load separate cube map faces into linear tiled textures
 			for (uint32_t face = 0; face < 6; ++face)
 			{
-				err = vkCreateImage(device, &imageCreateInfo, nullptr, &cubeFace[face].image);
-				assert(!err);
+				vkTools::checkResult(vkCreateImage(device, &imageCreateInfo, nullptr, &cubeFace[face].image));
 
 				vkGetImageMemoryRequirements(device, cubeFace[face].image, &memReqs);
 				memAllocInfo.allocationSize = memReqs.size;
 				getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, &memAllocInfo.memoryTypeIndex);
-				err = vkAllocateMemory(device, &memAllocInfo, nullptr, &cubeFace[face].memory);
-				assert(!err);
-				err = vkBindImageMemory(device, cubeFace[face].image, cubeFace[face].memory, 0);
-				assert(!err);
+				vkTools::checkResult(vkAllocateMemory(device, &memAllocInfo, nullptr, &cubeFace[face].memory));
+				vkTools::checkResult(vkBindImageMemory(device, cubeFace[face].image, cubeFace[face].memory, 0));
 
 				VkImageSubresource subRes = {};
 				subRes.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -475,9 +462,7 @@ namespace vkTools
 				void *data;
 
 				vkGetImageSubresourceLayout(device, cubeFace[face].image, &subRes, &subResLayout);
-				assert(!err);
-				err = vkMapMemory(device, cubeFace[face].memory, 0, memReqs.size, 0, &data);
-				assert(!err);
+				vkTools::checkResult(vkMapMemory(device, cubeFace[face].memory, 0, memReqs.size, 0, &data));
 				memcpy(data, texCube[face][subRes.mipLevel].data(), texCube[face][subRes.mipLevel].size());
 				vkUnmapMemory(device, cubeFace[face].memory);
 
@@ -487,7 +472,7 @@ namespace vkTools
 					cmdBuffer,
 					cubeFace[face].image,
 					VK_IMAGE_ASPECT_COLOR_BIT,
-					VK_IMAGE_LAYOUT_UNDEFINED,
+					VK_IMAGE_LAYOUT_PREINITIALIZED,
 					VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 			}
 
@@ -499,27 +484,33 @@ namespace vkTools
 			imageCreateInfo.flags = VK_IMAGE_CREATE_CUBE_COMPATIBLE_BIT;
 			imageCreateInfo.arrayLayers = 6;
 
-			err = vkCreateImage(device, &imageCreateInfo, nullptr, &texture->image);
-			assert(!err);
+			vkTools::checkResult(vkCreateImage(device, &imageCreateInfo, nullptr, &texture->image));
 
 			vkGetImageMemoryRequirements(device, texture->image, &memReqs);
 
 			memAllocInfo.allocationSize = memReqs.size;
 
 			getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &memAllocInfo.memoryTypeIndex);
-			err = vkAllocateMemory(device, &memAllocInfo, nullptr, &texture->deviceMemory);
-			assert(!err);
-			err = vkBindImageMemory(device, texture->image, texture->deviceMemory, 0);
-			assert(!err);
+			vkTools::checkResult(vkAllocateMemory(device, &memAllocInfo, nullptr, &texture->deviceMemory));
+			vkTools::checkResult(vkBindImageMemory(device, texture->image, texture->deviceMemory, 0));
 
 			// Image barrier for optimal image (target)
 			// Optimal image will be used as destination for the copy
-			setImageLayout(
+
+			// Set initial layout for all array layers of the optimal (target) tiled texture
+			VkImageSubresourceRange subresourceRange = {};
+			subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			subresourceRange.baseMipLevel = 0;
+			subresourceRange.levelCount = 1;
+			subresourceRange.layerCount = 6;
+
+			vkTools::setImageLayout(
 				cmdBuffer,
 				texture->image,
 				VK_IMAGE_ASPECT_COLOR_BIT,
-				VK_IMAGE_LAYOUT_UNDEFINED,
-				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+				VK_IMAGE_LAYOUT_PREINITIALIZED,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				subresourceRange);
 
 			// Copy cube map faces one by one
 			for (uint32_t face = 0; face < 6; ++face)
@@ -550,31 +541,34 @@ namespace vkTools
 					texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 					1, &copyRegion);
 
-				// Change texture image layout to shader read after the copy
-				texture->imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-				setImageLayout(
-					cmdBuffer,
-					texture->image,
-					VK_IMAGE_ASPECT_COLOR_BIT,
-					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-					texture->imageLayout);
 			}
 
-			err = vkEndCommandBuffer(cmdBuffer);
-			assert(!err);
+			// Change texture image layout to shader read after the copy
+			texture->imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			setImageLayout(
+				cmdBuffer,
+				texture->image,
+				VK_IMAGE_ASPECT_COLOR_BIT,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				texture->imageLayout,
+				subresourceRange);
 
-			VkFence nullFence = { VK_NULL_HANDLE };
+			vkTools::checkResult(vkEndCommandBuffer(cmdBuffer));
+
+			// Create a fence to make sure that the copies have finished before continuing
+			VkFence copyFence;
+			VkFenceCreateInfo fenceCreateInfo = vkTools::initializers::fenceCreateInfo(VK_FLAGS_NONE);
+			vkTools::checkResult(vkCreateFence(device, &fenceCreateInfo, nullptr, &copyFence));
 
 			VkSubmitInfo submitInfo = vkTools::initializers::submitInfo();
-			submitInfo.waitSemaphoreCount = 0;
 			submitInfo.commandBufferCount = 1;
 			submitInfo.pCommandBuffers = &cmdBuffer;
 
-			err = vkQueueSubmit(queue, 1, &submitInfo, nullFence);
-			assert(!err);
+			vkTools::checkResult(vkQueueSubmit(queue, 1, &submitInfo, copyFence));
 
-			err = vkQueueWaitIdle(queue);
-			assert(!err);
+			vkTools::checkResult(vkWaitForFences(device, 1, &copyFence, VK_TRUE, DEFAULT_FENCE_TIMEOUT));
+
+			vkDestroyFence(device, copyFence, nullptr);
 
 			// Create sampler
 			VkSamplerCreateInfo sampler = vkTools::initializers::samplerCreateInfo();
@@ -590,8 +584,7 @@ namespace vkTools
 			sampler.minLod = 0.0f;
 			sampler.maxLod = 0.0f;
 			sampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-			err = vkCreateSampler(device, &sampler, nullptr, &texture->sampler);
-			assert(!err);
+			vkTools::checkResult(vkCreateSampler(device, &sampler, nullptr, &texture->sampler));
 
 			// Create image view
 			VkImageViewCreateInfo view = vkTools::initializers::imageViewCreateInfo();
@@ -602,8 +595,7 @@ namespace vkTools
 			view.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 			view.subresourceRange.layerCount = 6;
 			view.image = texture->image;
-			err = vkCreateImageView(device, &view, nullptr, &texture->view);
-			assert(!err);
+			vkTools::checkResult(vkCreateImageView(device, &view, nullptr, &texture->view));
 
 			// Cleanup
 			for (auto& face : cubeFace)
@@ -617,7 +609,6 @@ namespace vkTools
 		void loadTextureArray(const char* filename, VkFormat format, VulkanTexture *texture)
 		{
 			VkFormatProperties formatProperties;
-			VkResult err;
 
 			gli::texture2DArray tex2DArray(gli::load(filename));
 			assert(!tex2DArray.empty());
@@ -639,7 +630,7 @@ namespace vkTools
 			imageCreateInfo.tiling = VK_IMAGE_TILING_LINEAR;
 			imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 			imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-			imageCreateInfo.flags = 0;
+			imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
 
 			VkMemoryAllocateInfo memAllocInfo = vkTools::initializers::memoryAllocateInfo();
 			VkMemoryRequirements memReqs;
@@ -658,28 +649,23 @@ namespace vkTools
 					cmdPool,
 					VK_COMMAND_BUFFER_LEVEL_PRIMARY,
 					1);
-			err = vkAllocateCommandBuffers(device, &cmdBufAlllocatInfo, &cmdBuffer);
-			assert(!err);
+			vkTools::checkResult(vkAllocateCommandBuffers(device, &cmdBufAlllocatInfo, &cmdBuffer));
 
 			VkCommandBufferBeginInfo cmdBufInfo =
 				vkTools::initializers::commandBufferBeginInfo();
 
-			err = vkBeginCommandBuffer(cmdBuffer, &cmdBufInfo);
-			assert(!err);
+			vkTools::checkResult(vkBeginCommandBuffer(cmdBuffer, &cmdBufInfo));
 
 			// Load separate cube map faces into linear tiled textures
 			for (uint32_t i = 0; i < texture->layerCount; ++i)
 			{
-				err = vkCreateImage(device, &imageCreateInfo, nullptr, &arrayLayer[i].image);
-				assert(!err);
+				vkTools::checkResult(vkCreateImage(device, &imageCreateInfo, nullptr, &arrayLayer[i].image));
 
 				vkGetImageMemoryRequirements(device, arrayLayer[i].image, &memReqs);
 				memAllocInfo.allocationSize = memReqs.size;
 				getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT, &memAllocInfo.memoryTypeIndex);
-				err = vkAllocateMemory(device, &memAllocInfo, nullptr, &arrayLayer[i].memory);
-				assert(!err);
-				err = vkBindImageMemory(device, arrayLayer[i].image, arrayLayer[i].memory, 0);
-				assert(!err);
+				vkTools::checkResult(vkAllocateMemory(device, &memAllocInfo, nullptr, &arrayLayer[i].memory));
+				vkTools::checkResult(vkBindImageMemory(device, arrayLayer[i].image, arrayLayer[i].memory, 0));
 
 				VkImageSubresource subRes = {};
 				subRes.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
@@ -688,9 +674,7 @@ namespace vkTools
 				void *data;
 
 				vkGetImageSubresourceLayout(device, arrayLayer[i].image, &subRes, &subResLayout);
-				assert(!err);
-				err = vkMapMemory(device, arrayLayer[i].memory, 0, memReqs.size, 0, &data);
-				assert(!err);
+				vkTools::checkResult(vkMapMemory(device, arrayLayer[i].memory, 0, memReqs.size, 0, &data));
 				memcpy(data, tex2DArray[i].data(), tex2DArray[i].size());
 				vkUnmapMemory(device, arrayLayer[i].memory);
 
@@ -700,7 +684,7 @@ namespace vkTools
 					cmdBuffer,
 					arrayLayer[i].image,
 					VK_IMAGE_ASPECT_COLOR_BIT,
-					VK_IMAGE_LAYOUT_UNDEFINED,
+					VK_IMAGE_LAYOUT_PREINITIALIZED,
 					VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 			}
 
@@ -711,27 +695,33 @@ namespace vkTools
 			imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
 			imageCreateInfo.arrayLayers = texture->layerCount;
 
-			err = vkCreateImage(device, &imageCreateInfo, nullptr, &texture->image);
-			assert(!err);
+			vkTools::checkResult(vkCreateImage(device, &imageCreateInfo, nullptr, &texture->image));
 
 			vkGetImageMemoryRequirements(device, texture->image, &memReqs);
 
 			memAllocInfo.allocationSize = memReqs.size;
 
 			getMemoryType(memReqs.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &memAllocInfo.memoryTypeIndex);
-			err = vkAllocateMemory(device, &memAllocInfo, nullptr, &texture->deviceMemory);
-			assert(!err);
-			err = vkBindImageMemory(device, texture->image, texture->deviceMemory, 0);
-			assert(!err);
+			vkTools::checkResult(vkAllocateMemory(device, &memAllocInfo, nullptr, &texture->deviceMemory));
+			vkTools::checkResult(vkBindImageMemory(device, texture->image, texture->deviceMemory, 0));
 
 			// Image barrier for optimal image (target)
 			// Optimal image will be used as destination for the copy
+
+			// Set initial layout for all array layers of the optimal (target) tiled texture
+			VkImageSubresourceRange subresourceRange = {};
+			subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+			subresourceRange.baseMipLevel = 0;
+			subresourceRange.levelCount = 1;
+			subresourceRange.layerCount = texture->layerCount;
+
 			vkTools::setImageLayout(
 				cmdBuffer,
 				texture->image,
 				VK_IMAGE_ASPECT_COLOR_BIT,
-				VK_IMAGE_LAYOUT_UNDEFINED,
-				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+				VK_IMAGE_LAYOUT_PREINITIALIZED,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				subresourceRange);
 
 			// Copy cube map faces one by one
 			for (uint32_t i = 0; i < texture->layerCount; ++i)
@@ -761,32 +751,34 @@ namespace vkTools
 					arrayLayer[i].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 					texture->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 					1, &copyRegion);
-
-				// Change texture image layout to shader read after the copy
-				texture->imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-				vkTools::setImageLayout(
-					cmdBuffer,
-					texture->image,
-					VK_IMAGE_ASPECT_COLOR_BIT,
-					VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-					texture->imageLayout);
 			}
 
-			err = vkEndCommandBuffer(cmdBuffer);
-			assert(!err);
+			// Change texture image layout to shader read after the copy
+			texture->imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+			vkTools::setImageLayout(
+				cmdBuffer,
+				texture->image,
+				VK_IMAGE_ASPECT_COLOR_BIT,
+				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+				texture->imageLayout,
+				subresourceRange);
 
-			VkFence nullFence = { VK_NULL_HANDLE };
+			vkTools::checkResult(vkEndCommandBuffer(cmdBuffer));
 
-			// Submit command buffer to graphis queue
+			// Create a fence to make sure that the copies have finished before continuing
+			VkFence copyFence;
+			VkFenceCreateInfo fenceCreateInfo = vkTools::initializers::fenceCreateInfo(VK_FLAGS_NONE);
+			vkTools::checkResult(vkCreateFence(device, &fenceCreateInfo, nullptr, &copyFence));
+
 			VkSubmitInfo submitInfo = vkTools::initializers::submitInfo();
 			submitInfo.commandBufferCount = 1;
 			submitInfo.pCommandBuffers = &cmdBuffer;
 
-			err = vkQueueSubmit(queue, 1, &submitInfo, nullFence);
-			assert(!err);
+			vkTools::checkResult(vkQueueSubmit(queue, 1, &submitInfo, copyFence));
 
-			err = vkQueueWaitIdle(queue);
-			assert(!err);
+			vkTools::checkResult(vkWaitForFences(device, 1, &copyFence, VK_TRUE, DEFAULT_FENCE_TIMEOUT));
+
+			vkDestroyFence(device, copyFence, nullptr);
 
 			// Create sampler
 			VkSamplerCreateInfo sampler = vkTools::initializers::samplerCreateInfo();
@@ -802,8 +794,7 @@ namespace vkTools
 			sampler.minLod = 0.0f;
 			sampler.maxLod = 0.0f;
 			sampler.borderColor = VK_BORDER_COLOR_FLOAT_OPAQUE_WHITE;
-			err = vkCreateSampler(device, &sampler, nullptr, &texture->sampler);
-			assert(!err);
+			vkTools::checkResult(vkCreateSampler(device, &sampler, nullptr, &texture->sampler));
 
 			// Create image view
 			VkImageViewCreateInfo view = vkTools::initializers::imageViewCreateInfo();
@@ -814,8 +805,7 @@ namespace vkTools
 			view.subresourceRange = { VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
 			view.subresourceRange.layerCount = texture->layerCount;
 			view.image = texture->image;
-			err = vkCreateImageView(device, &view, nullptr, &texture->view);
-			assert(!err);
+			vkTools::checkResult(vkCreateImageView(device, &view, nullptr, &texture->view));
 
 			// Cleanup
 			for (auto& layer : arrayLayer)

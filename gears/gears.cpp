@@ -13,6 +13,7 @@
 #include <vector>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -359,7 +360,7 @@ public:
 
 	void updateUniformBuffers()
 	{
-		glm::mat4 perspective = glm::perspective(deg_to_rad(60.0f), (float)width / (float)height, 0.001f, 256.0f);
+		glm::mat4 perspective = glm::perspective(glm::radians(60.0f), (float)width / (float)height, 0.001f, 256.0f);
 		for (auto& gear : gears)
 		{
 			gear->updateUniformBuffer(perspective, rotation, zoom, timer * 360.0f);

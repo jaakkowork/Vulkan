@@ -19,15 +19,20 @@
 #include <stdio.h>
 #include <vector>
 #include <iostream>
-#ifdef _WIN32
+#include <stdexcept>
+#if defined(_WIN32)
 #include <windows.h>
 #include <fcntl.h>
 #include <io.h>
-#else
+#elif defined(__ANDROID__)
+#include "vulkanandroid.h"
+#include <android/asset_manager.h>
 #endif
 
 // Custom define for better code readability
 #define VK_FLAGS_NONE 0
+// Default fence timeout in nanoseconds
+#define DEFAULT_FENCE_TIMEOUT 100000000000
 
 namespace vkTools
 {
@@ -37,12 +42,22 @@ namespace vkTools
 	VkBool32 checkDeviceExtensionPresent(VkPhysicalDevice physicalDevice, const char* extensionName);
 	// Return string representation of a vulkan error string
 	std::string errorString(VkResult errorCode);
-	
+	// Asserts and outputs the error message if the result is not VK_SUCCESS
+	VkResult checkResult(VkResult result);
+
 	// Selected a suitable supported depth format starting with 32 bit down to 16 bit
 	// Returns false if none of the depth formats in the list is supported by the device
 	VkBool32 getSupportedDepthFormat(VkPhysicalDevice physicalDevice, VkFormat *depthFormat);
 
-	// Put an image memory barrier for setting an image layout into the given command buffer
+	// Put an image memory barrier for setting an image layout on the sub resource into the given command buffer
+	void setImageLayout(
+		VkCommandBuffer cmdbuffer,
+		VkImage image,
+		VkImageAspectFlags aspectMask,
+		VkImageLayout oldImageLayout,
+		VkImageLayout newImageLayout,
+		VkImageSubresourceRange subresourceRange);
+	// Uses a fixed sub resource layout with first mip level and layer
 	void setImageLayout(
 		VkCommandBuffer cmdbuffer, 
 		VkImage image, 
@@ -56,8 +71,14 @@ namespace vkTools
 	std::string readTextFile(const char *fileName);
 	// Load a binary file into a buffer (e.g. SPIR-V)
 	char *readBinaryFile(const char *filename, size_t *psize);
+
 	// Load a SPIR-V shader
+#if defined(__ANDROID__)
+	VkShaderModule loadShader(AAssetManager* assetManager, const char *fileName, VkDevice device, VkShaderStageFlagBits stage);
+#else
 	VkShaderModule loadShader(const char *fileName, VkDevice device, VkShaderStageFlagBits stage);
+#endif
+
 	// Load a GLSL shader
 	// Note : Only for testing purposes, support for directly feeding GLSL shaders into Vulkan
 	// may be dropped at some point	
@@ -101,6 +122,7 @@ namespace vkTools
 		VkCommandBufferInheritanceInfo commandBufferInheritanceInfo();
 
 		VkRenderPassBeginInfo renderPassBeginInfo();
+		VkRenderPassCreateInfo renderPassCreateInfo();
 
 		VkImageMemoryBarrier imageMemoryBarrier();
 		VkBufferMemoryBarrier bufferMemoryBarrier();

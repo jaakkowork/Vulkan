@@ -13,6 +13,7 @@
 #include <vector>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -199,7 +200,7 @@ public:
 		imageCreateInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
 		// Texture will be sampled in a shader and is also the blit destination
 		imageCreateInfo.usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-		imageCreateInfo.flags = 0;
+		imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
 
 		VkMemoryAllocateInfo memAllocInfo = vkTools::initializers::memoryAllocateInfo();
 		VkMemoryRequirements memReqs;
@@ -217,12 +218,12 @@ public:
 		// Image memory barrier
 		// Set initial layout for the offscreen texture transfer destination
 		// Will be transformed while updating the texture
-		offScreenFrameBuf.textureTarget.imageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+		offScreenFrameBuf.textureTarget.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 		vkTools::setImageLayout(
 			setupCmdBuffer, 
 			offScreenFrameBuf.textureTarget.image,
 			VK_IMAGE_ASPECT_COLOR_BIT, 
-			VK_IMAGE_LAYOUT_UNDEFINED, 
+			VK_IMAGE_LAYOUT_PREINITIALIZED,
 			offScreenFrameBuf.textureTarget.imageLayout);
 
 		// Create sampler
@@ -263,6 +264,7 @@ public:
 	// blitted to our render target
 	void prepareOffscreenFramebuffer()
 	{
+
 		createSetupCommandBuffer();
 
 		offScreenFrameBuf.width = FB_DIM;
@@ -292,6 +294,7 @@ public:
 		image.flags = 0;
 
 		VkMemoryAllocateInfo memAlloc = vkTools::initializers::memoryAllocateInfo();
+		VkMemoryRequirements memReqs;
 
 		VkImageViewCreateInfo colorImageView = vkTools::initializers::imageViewCreateInfo();
 		colorImageView.viewType = VK_IMAGE_VIEW_TYPE_2D;
@@ -304,8 +307,6 @@ public:
 		colorImageView.subresourceRange.baseArrayLayer = 0;
 		colorImageView.subresourceRange.layerCount = 1;
 
-		VkMemoryRequirements memReqs;
-
 		err = vkCreateImage(device, &image, nullptr, &offScreenFrameBuf.color.image);
 		assert(!err);
 		vkGetImageMemoryRequirements(device, offScreenFrameBuf.color.image, &memReqs);
@@ -316,11 +317,12 @@ public:
 
 		err = vkBindImageMemory(device, offScreenFrameBuf.color.image, offScreenFrameBuf.color.mem, 0);
 		assert(!err);
+
 		vkTools::setImageLayout(
-			setupCmdBuffer, 
-			offScreenFrameBuf.color.image, 
-			VK_IMAGE_ASPECT_COLOR_BIT, 
-			VK_IMAGE_LAYOUT_UNDEFINED, 
+			setupCmdBuffer,
+			offScreenFrameBuf.color.image,
+			VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_UNDEFINED,
 			VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL);
 
 		colorImageView.image = offScreenFrameBuf.color.image;
@@ -352,25 +354,25 @@ public:
 
 		err = vkBindImageMemory(device, offScreenFrameBuf.depth.image, offScreenFrameBuf.depth.mem, 0);
 		assert(!err);
-		createSetupCommandBuffer();
+
 		vkTools::setImageLayout(
-			setupCmdBuffer, 
-			offScreenFrameBuf.depth.image, 
-			VK_IMAGE_ASPECT_DEPTH_BIT, 
-			VK_IMAGE_LAYOUT_UNDEFINED, 
+			setupCmdBuffer,
+			offScreenFrameBuf.depth.image,
+			VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT,
+			VK_IMAGE_LAYOUT_UNDEFINED,
 			VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
 
 		depthStencilView.image = offScreenFrameBuf.depth.image;
 		err = vkCreateImageView(device, &depthStencilView, nullptr, &offScreenFrameBuf.depth.view);
 		assert(!err);
-		
+
+		flushSetupCommandBuffer();
+
 		VkImageView attachments[2];
 		attachments[0] = offScreenFrameBuf.color.view;
 		attachments[1] = offScreenFrameBuf.depth.view;
 
-		VkFramebufferCreateInfo fbufCreateInfo = {};
-		fbufCreateInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
-		fbufCreateInfo.pNext = NULL;
+		VkFramebufferCreateInfo fbufCreateInfo = vkTools::initializers::framebufferCreateInfo();
 		fbufCreateInfo.renderPass = renderPass;
 		fbufCreateInfo.attachmentCount = 2;
 		fbufCreateInfo.pAttachments = attachments;
@@ -380,8 +382,6 @@ public:
 
 		err = vkCreateFramebuffer(device, &fbufCreateInfo, nullptr, &offScreenFrameBuf.frameBuffer);
 		assert(!err);
-
-		flushSetupCommandBuffer();
 	}
 
 	void createOffscreenCommandBuffer()
@@ -518,7 +518,6 @@ public:
 
 		err = vkEndCommandBuffer(offScreenCmdBuffer);
 		assert(!err);
-
 	}
 
 	void buildCommandBuffers()
@@ -1036,13 +1035,13 @@ public:
 	void updateUniformBuffers()
 	{
 		// Mesh
-		ubos.vsShared.projection = glm::perspective(deg_to_rad(60.0f), (float)width / (float)height, 0.1f, 256.0f);
+		ubos.vsShared.projection = glm::perspective(glm::radians(60.0f), (float)width / (float)height, 0.1f, 256.0f);
 		glm::mat4 viewMatrix = glm::translate(glm::mat4(), glm::vec3(0.0f, 0.0f, zoom));
 
 		ubos.vsShared.model = viewMatrix * glm::translate(glm::mat4(), glm::vec3(0, 0, 0));
-		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		ubos.vsShared.model = glm::translate(ubos.vsShared.model, meshPos);
 
@@ -1054,9 +1053,9 @@ public:
 
 		// Mirror
 		ubos.vsShared.model = viewMatrix * glm::translate(glm::mat4(), glm::vec3(0, 0, 0));
-		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		err = vkMapMemory(device, uniformData.vsMirror.memory, 0, sizeof(ubos.vsShared), 0, (void **)&pData);
 		assert(!err);
@@ -1075,13 +1074,13 @@ public:
 
 	void updateUniformBufferOffscreen()
 	{
-		ubos.vsShared.projection = glm::perspective(deg_to_rad(60.0f), (float)width / (float)height, 0.1f, 256.0f);
+		ubos.vsShared.projection = glm::perspective(glm::radians(60.0f), (float)width / (float)height, 0.1f, 256.0f);
 		glm::mat4 viewMatrix = glm::translate(glm::mat4(), glm::vec3(0.0f, 0.0f, zoom));
 
 		ubos.vsShared.model = viewMatrix * glm::translate(glm::mat4(), glm::vec3(0, 0, 0));
-		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		ubos.vsShared.model = glm::rotate(ubos.vsShared.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		ubos.vsShared.model = glm::scale(ubos.vsShared.model, glm::vec3(1.0f, -1.0f, 1.0f));
 		ubos.vsShared.model = glm::translate(ubos.vsShared.model, meshPos);

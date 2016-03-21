@@ -1,7 +1,5 @@
 /*
-* Vulkan Example - Mesh rendering
-*
-* Uses tiny obj loader (https://github.com/syoyo/tinyobjloader) by syoyo
+* Vulkan Example - Basic Android example
 *
 * Note :
 *	This is a basic android example. It may be integrated into the other examples at some point in the future.
@@ -17,12 +15,10 @@
 #include "vulkanandroid.h"
 #include "vulkanswapchain.hpp" 
 #include <android/asset_manager.h>
-
-#define TINYOBJLOADER_IMPLEMENTATION
-#include "tiny_obj_loader.h"
+#include <chrono>
 
 #define GLM_FORCE_RADIANS
-#define GLM_DEPTH_ZERO_TO_ONE
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include "glm/glm.hpp"
 #include "glm/gtc/matrix_transform.hpp"
 
@@ -44,14 +40,9 @@ struct VulkanExample
 	uint32_t width;
 	uint32_t height;
 	struct saved_state state;
+	float frameTimer = 0;
 
 	// Vulkan
-	struct Vertex {
-		glm::vec3 pos;
-		glm::vec3 normal;
-		glm::vec3 color;
-	};
-
 	VkInstance instance;
 	VkPhysicalDevice physicalDevice;
 	VkDevice device;
@@ -69,6 +60,11 @@ struct VulkanExample
 	VkCommandBuffer setupCmdBuffer = VK_NULL_HANDLE;
 	VkPhysicalDeviceMemoryProperties deviceMemoryProperties;
 	std::vector<VkShaderModule> shaderModules;
+
+	struct {
+		VkSemaphore presentComplete;
+		VkSemaphore submitSignal;
+	} semaphores;
 
 	struct {
 		VkBuffer buf;
@@ -91,9 +87,9 @@ struct VulkanExample
 	}  uniformDataVS;
 
 	struct {
-		glm::mat4 projection;
-		glm::mat4 model;
-		glm::vec4 lightPos = glm::vec4(0.0f, 0.0f, 10.0f, 1.0f);
+		glm::mat4 projectionMatrix;
+		glm::mat4 modelMatrix;
+		glm::mat4 viewMatrix;
 	} uboVS;
 
 	struct {
@@ -166,7 +162,7 @@ struct VulkanExample
 		shaderStage.module = loadShaderModule(fileName, stage);
 		shaderStage.pName = "main";
 		assert(shaderStage.module != NULL);
-		shaderModules.push_back(shaderStage.module);
+		shaderModules.push_back(shaderStage.module); 
 		return shaderStage;
 	}
 
@@ -262,6 +258,15 @@ struct VulkanExample
 		VkResult err = vkCreatePipelineCache(device, &pipelineCacheCreateInfo, nullptr, &pipelineCache);
 		assert(!err);
 
+		// Create semaphores for synchronization
+		VkSemaphoreCreateInfo semaphoreCreateInfo = {};
+		semaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+		err = vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphores.presentComplete);
+		assert(!err);
+		err = vkCreateSemaphore(device, &semaphoreCreateInfo, nullptr, &semaphores.submitSignal);
+		assert(!err);
+
 		createSetupCommandBuffer();
 		startSetupCommandBuffer();
 
@@ -328,6 +333,9 @@ struct VulkanExample
 		vkDestroyImageView(device, depthStencil.view, nullptr);
 		vkDestroyImage(device, depthStencil.image, nullptr);
 		vkFreeMemory(device, depthStencil.mem, nullptr);
+
+		vkDestroySemaphore(device, semaphores.presentComplete, nullptr);
+		vkDestroySemaphore(device, semaphores.submitSignal, nullptr);
 
 		vkDestroyPipelineCache(device, pipelineCache, nullptr);
 		vkDestroyDevice(device, nullptr);
@@ -397,57 +405,24 @@ struct VulkanExample
 
 	void prepareVertices()
 	{
-		// Load mesh from compressed asset
-		AAsset* asset = AAssetManager_open(app->activity->assetManager, "models/vulkanlogo.obj", AASSET_MODE_STREAMING);
-		assert(asset);
-		size_t size = AAsset_getLength(asset);
-		assert(size > 0);
-
-		char *assetData = new char[size];
-		AAsset_read(asset, assetData, size);
-		AAsset_close(asset);
-
-		std::stringstream assetStream(assetData);
-
-		std::vector<tinyobj::shape_t> shapes;
-		std::vector<tinyobj::material_t> materials;
-		std::string objerr;
-		tinyobj::MaterialFileReader matFileReader("");
-		bool ret = tinyobj::LoadObj(shapes, materials, objerr, assetStream, matFileReader, true);
-
-		LOGW("shapes %d", shapes.size());
+		struct Vertex {
+			float pos[3];
+			float col[3];
+		};
 
 		// Setup vertices
-		float scale = 0.025f;
 		std::vector<Vertex> vertexBuffer;
+		vertexBuffer.push_back({ { 1.0f,  1.0f, 0.0f },{ 1.0f, 0.0f, 0.0f } });
+		vertexBuffer.push_back({ { -1.0f,  1.0f, 0.0f },{ 0.0f, 1.0f, 0.0f } });
+		vertexBuffer.push_back({ { 0.0f, -1.0f, 0.0f },{ 0.0f, 0.0f, 1.0f } });
+		int vertexBufferSize = vertexBuffer.size() * sizeof(Vertex);
+
+		// Setup indices
 		std::vector<uint32_t> indexBuffer;
-		for (auto& shape : shapes)
-		{
-			// Vertices
-			for (size_t i = 0; i < shape.mesh.positions.size() / 3; i++)
-			{
-				Vertex v;
-				v.pos[0] = shape.mesh.positions[3 * i + 0] * scale;
-				v.pos[1] = -shape.mesh.positions[3 * i + 1] * scale;
-				v.pos[2] = shape.mesh.positions[3 * i + 2] * scale;
-				v.normal[0] = shape.mesh.normals[3 * i + 0];
-				v.normal[1] = shape.mesh.normals[3 * i + 1];
-				v.normal[2] = shape.mesh.normals[3 * i + 2];
-				v.color = glm::vec3(1.0f, 0.0f, 0.0f);
-				vertexBuffer.push_back(v);
-			}
-			// Indices
-			for (size_t i = 0; i < shape.mesh.indices.size() / 3; i++)
-			{
-				indexBuffer.push_back(shape.mesh.indices[3 * i + 0]);
-				indexBuffer.push_back(shape.mesh.indices[3 * i + 1]);
-				indexBuffer.push_back(shape.mesh.indices[3 * i + 2]);
-			}
-
-		}
-
-		uint32_t vertexBufferSize = vertexBuffer.size() * sizeof(Vertex);
-		uint32_t indexBufferSize = indexBuffer.size() * sizeof(uint32_t);
+		indexBuffer.push_back(0);
+		indexBuffer.push_back(1);
+		indexBuffer.push_back(2);
+		int indexBufferSize = indexBuffer.size() * sizeof(uint32_t);
 
 		VkMemoryAllocateInfo memAlloc = {};
 		memAlloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
@@ -511,36 +486,25 @@ struct VulkanExample
 
 		// Binding description
 		vertices.bindingDescriptions.resize(1);
-		vertices.bindingDescriptions[0] =
-			vkTools::initializers::vertexInputBindingDescription(
-				VERTEX_BUFFER_BIND_ID,
-				sizeof(Vertex),
-				VK_VERTEX_INPUT_RATE_VERTEX);
+		vertices.bindingDescriptions[0].binding = VERTEX_BUFFER_BIND_ID;
+		vertices.bindingDescriptions[0].stride = sizeof(Vertex);
+		vertices.bindingDescriptions[0].inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
 		// Attribute descriptions
-		// Describes memory layout and shader positions
-		vertices.attributeDescriptions.resize(3);
+		// Describes memory layout and shader attribute locations
+		vertices.attributeDescriptions.resize(2);
 		// Location 0 : Position
-		vertices.attributeDescriptions[0] =
-			vkTools::initializers::vertexInputAttributeDescription(
-				VERTEX_BUFFER_BIND_ID,
-				0,
-				VK_FORMAT_R32G32B32_SFLOAT,
-				0);
-		// Location 1 : Normal
-		vertices.attributeDescriptions[1] =
-			vkTools::initializers::vertexInputAttributeDescription(
-				VERTEX_BUFFER_BIND_ID,
-				1,
-				VK_FORMAT_R32G32B32_SFLOAT,
-				sizeof(float) * 3);
-		// Location 2 : Color
-		vertices.attributeDescriptions[2] =
-			vkTools::initializers::vertexInputAttributeDescription(
-				VERTEX_BUFFER_BIND_ID,
-				2,
-				VK_FORMAT_R32G32B32_SFLOAT,
-				sizeof(float) * 6);
+		vertices.attributeDescriptions[0].binding = VERTEX_BUFFER_BIND_ID;
+		vertices.attributeDescriptions[0].location = 0;
+		vertices.attributeDescriptions[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+		vertices.attributeDescriptions[0].offset = 0;
+		vertices.attributeDescriptions[0].binding = 0;
+		// Location 1 : Color
+		vertices.attributeDescriptions[1].binding = VERTEX_BUFFER_BIND_ID;
+		vertices.attributeDescriptions[1].location = 1;
+		vertices.attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+		vertices.attributeDescriptions[1].offset = sizeof(float) * 3;
+		vertices.attributeDescriptions[1].binding = 0;
 
 		// Assign to vertex buffer
 		vertices.inputState.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -554,15 +518,14 @@ struct VulkanExample
 	void updateUniformBuffers()
 	{
 		// Update matrices
-		uboVS.projection = glm::perspective(glm::radians(60.0f), (float)width / (float)height, 0.1f, 256.0f);
+		uboVS.projectionMatrix = glm::perspective(glm::radians(60.0f), (float)width / (float)height, 0.1f, 256.0f);
 
-		glm::mat4 viewMatrix = glm::translate(glm::mat4(), glm::vec3(0.0f, 0.0f, state.zoom));
+		uboVS.viewMatrix = glm::translate(glm::mat4(), glm::vec3(0.0f, 0.0f, state.zoom));
 
-		uboVS.model = viewMatrix;
-		uboVS.model = glm::rotate(uboVS.model, glm::radians(state.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, glm::radians(state.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, glm::radians(state.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
-
+		uboVS.modelMatrix = glm::mat4();
+		uboVS.modelMatrix = glm::rotate(uboVS.modelMatrix, glm::radians(state.rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		uboVS.modelMatrix = glm::rotate(uboVS.modelMatrix, glm::radians(state.rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		uboVS.modelMatrix = glm::rotate(uboVS.modelMatrix, glm::radians(state.rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		// Map uniform buffer and update it
 		uint8_t *pData;
@@ -617,68 +580,102 @@ struct VulkanExample
 
 	void preparePipelines()
 	{
+		VkGraphicsPipelineCreateInfo pipelineCreateInfo = {};
+
 		VkResult err;
 
-		VkPipelineInputAssemblyStateCreateInfo inputAssemblyState =
-			vkTools::initializers::pipelineInputAssemblyStateCreateInfo(
-				VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
-				0,
-				VK_FALSE);
+		pipelineCreateInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+		// The layout used for this pipeline
+		pipelineCreateInfo.layout = pipelineLayout;
+		// Renderpass this pipeline is attached to
+		pipelineCreateInfo.renderPass = renderPass;
 
-		VkPipelineRasterizationStateCreateInfo rasterizationState =
-			vkTools::initializers::pipelineRasterizationStateCreateInfo(
-				VK_POLYGON_MODE_FILL,
-				VK_CULL_MODE_NONE,
-				VK_FRONT_FACE_COUNTER_CLOCKWISE,
-				0);
+		// Vertex input state
+		// Describes the topoloy used with this pipeline
+		VkPipelineInputAssemblyStateCreateInfo inputAssemblyState = {};
+		inputAssemblyState.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+		// This pipeline renders vertex data as triangle lists
+		inputAssemblyState.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
 
-		VkPipelineColorBlendAttachmentState blendAttachmentState =
-			vkTools::initializers::pipelineColorBlendAttachmentState(
-				0xf,
-				VK_FALSE);
+		// Rasterization state
+		VkPipelineRasterizationStateCreateInfo rasterizationState = {};
+		rasterizationState.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+		// Solid polygon mode
+		rasterizationState.polygonMode = VK_POLYGON_MODE_FILL;
+		// No culling
+		rasterizationState.cullMode = VK_CULL_MODE_NONE;
+		rasterizationState.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+		rasterizationState.depthClampEnable = VK_FALSE;
+		rasterizationState.rasterizerDiscardEnable = VK_FALSE;
+		rasterizationState.depthBiasEnable = VK_FALSE;
 
-		VkPipelineColorBlendStateCreateInfo colorBlendState =
-			vkTools::initializers::pipelineColorBlendStateCreateInfo(
-				1,
-				&blendAttachmentState);
+		// Color blend state
+		// Describes blend modes and color masks
+		VkPipelineColorBlendStateCreateInfo colorBlendState = {};
+		colorBlendState.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+		// One blend attachment state
+		// Blending is not used in this example
+		VkPipelineColorBlendAttachmentState blendAttachmentState[1] = {};
+		blendAttachmentState[0].colorWriteMask = 0xf;
+		blendAttachmentState[0].blendEnable = VK_FALSE;
+		colorBlendState.attachmentCount = 1;
+		colorBlendState.pAttachments = blendAttachmentState;
 
-		VkPipelineDepthStencilStateCreateInfo depthStencilState =
-			vkTools::initializers::pipelineDepthStencilStateCreateInfo(
-				VK_TRUE,
-				VK_TRUE,
-				VK_COMPARE_OP_LESS_OR_EQUAL);
+		// Viewport state
+		VkPipelineViewportStateCreateInfo viewportState = {};
+		viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+		// One viewport
+		viewportState.viewportCount = 1;
+		// One scissor rectangle
+		viewportState.scissorCount = 1;
 
-		VkPipelineViewportStateCreateInfo viewportState =
-			vkTools::initializers::pipelineViewportStateCreateInfo(1, 1, 0);
-
-		VkPipelineMultisampleStateCreateInfo multisampleState =
-			vkTools::initializers::pipelineMultisampleStateCreateInfo(
-				VK_SAMPLE_COUNT_1_BIT,
-				0);
-
+		// Enable dynamic states
+		// Describes the dynamic states to be used with this pipeline
+		// Dynamic states can be set even after the pipeline has been created
+		// So there is no need to create new pipelines just for changing
+		// a viewport's dimensions or a scissor box
+		VkPipelineDynamicStateCreateInfo dynamicState = {};
+		// The dynamic state properties themselves are stored in the command buffer
 		std::vector<VkDynamicState> dynamicStateEnables;
 		dynamicStateEnables.push_back(VK_DYNAMIC_STATE_VIEWPORT);
 		dynamicStateEnables.push_back(VK_DYNAMIC_STATE_SCISSOR);
+		dynamicState.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+		dynamicState.pDynamicStates = dynamicStateEnables.data();
+		dynamicState.dynamicStateCount = dynamicStateEnables.size();
 
-		VkPipelineDynamicStateCreateInfo dynamicState =
-			vkTools::initializers::pipelineDynamicStateCreateInfo(
-				dynamicStateEnables.data(),
-				dynamicStateEnables.size(),
-				0);
+		// Depth and stencil state
+		// Describes depth and stenctil test and compare ops
+		VkPipelineDepthStencilStateCreateInfo depthStencilState = {};
+		// Basic depth compare setup with depth writes and depth test enabled
+		// No stencil used 
+		depthStencilState.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+		depthStencilState.depthTestEnable = VK_TRUE;
+		depthStencilState.depthWriteEnable = VK_TRUE;
+		depthStencilState.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+		depthStencilState.depthBoundsTestEnable = VK_FALSE;
+		depthStencilState.back.failOp = VK_STENCIL_OP_KEEP;
+		depthStencilState.back.passOp = VK_STENCIL_OP_KEEP;
+		depthStencilState.back.compareOp = VK_COMPARE_OP_ALWAYS;
+		depthStencilState.stencilTestEnable = VK_FALSE;
+		depthStencilState.front = depthStencilState.back;
 
-		// Rendering pipeline
+		// Multi sampling state
+		VkPipelineMultisampleStateCreateInfo multisampleState = {};
+		multisampleState.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+		multisampleState.pSampleMask = NULL;
+		// No multi sampling used in this example
+		multisampleState.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
 		// Load shaders
-		std::array<VkPipelineShaderStageCreateInfo, 2> shaderStages;
+		VkPipelineShaderStageCreateInfo shaderStages[2] = { {},{} };
 
-		shaderStages[0] = loadShader("shaders/mesh.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
-		shaderStages[1] = loadShader("shaders/mesh.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
+		shaderStages[0] = loadShader("shaders/triangle.vert.spv", VK_SHADER_STAGE_VERTEX_BIT);
+		shaderStages[1] = loadShader("shaders/triangle.frag.spv", VK_SHADER_STAGE_FRAGMENT_BIT);
 
-		VkGraphicsPipelineCreateInfo pipelineCreateInfo =
-			vkTools::initializers::pipelineCreateInfo(
-				pipelineLayout,
-				renderPass,
-				0);
-
+		// Assign states
+		// Two shader stages
+		pipelineCreateInfo.stageCount = 2;
+		// Assign pipeline state create information
 		pipelineCreateInfo.pVertexInputState = &vertices.inputState;
 		pipelineCreateInfo.pInputAssemblyState = &inputAssemblyState;
 		pipelineCreateInfo.pRasterizationState = &rasterizationState;
@@ -686,25 +683,27 @@ struct VulkanExample
 		pipelineCreateInfo.pMultisampleState = &multisampleState;
 		pipelineCreateInfo.pViewportState = &viewportState;
 		pipelineCreateInfo.pDepthStencilState = &depthStencilState;
-		pipelineCreateInfo.pDynamicState = &dynamicState;
-		pipelineCreateInfo.stageCount = shaderStages.size();
-		pipelineCreateInfo.pStages = shaderStages.data();
+		pipelineCreateInfo.pStages = shaderStages;
 		pipelineCreateInfo.renderPass = renderPass;
+		pipelineCreateInfo.pDynamicState = &dynamicState;
 
+		// Create rendering pipeline
 		err = vkCreateGraphicsPipelines(device, pipelineCache, 1, &pipelineCreateInfo, nullptr, &pipelines.solid);
 		assert(!err);
 	}
 
 	void setupDescriptorPool()
 	{
-		std::vector<VkDescriptorPoolSize> poolSizes;
-		poolSizes.push_back(vkTools::initializers::descriptorPoolSize(VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1));
+		VkDescriptorPoolSize typeCounts[1];
+		typeCounts[0].type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		typeCounts[0].descriptorCount = 1;
 
-		VkDescriptorPoolCreateInfo descriptorPoolInfo =
-			vkTools::initializers::descriptorPoolCreateInfo(
-				poolSizes.size(),
-				poolSizes.data(),
-				2);
+		VkDescriptorPoolCreateInfo descriptorPoolInfo = {};
+		descriptorPoolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+		descriptorPoolInfo.pNext = NULL;
+		descriptorPoolInfo.poolSizeCount = 1;
+		descriptorPoolInfo.pPoolSizes = typeCounts;
+		descriptorPoolInfo.maxSets = 1;
 
 		VkResult vkRes = vkCreateDescriptorPool(device, &descriptorPoolInfo, nullptr, &descriptorPool);
 		assert(!vkRes);
@@ -712,26 +711,27 @@ struct VulkanExample
 
 	void setupDescriptorSetLayout()
 	{
-		std::vector<VkDescriptorSetLayoutBinding> setLayoutBindings;
-		setLayoutBindings.push_back(
-			// Binding 0 : Vertex shader uniform buffer
-			vkTools::initializers::descriptorSetLayoutBinding(
-				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-				VK_SHADER_STAGE_VERTEX_BIT,
-				0));
+		// Binding 0 : Uniform buffer (Vertex shader)
+		VkDescriptorSetLayoutBinding layoutBinding = {};
+		layoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		layoutBinding.descriptorCount = 1;
+		layoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+		layoutBinding.pImmutableSamplers = NULL;
 
-		VkDescriptorSetLayoutCreateInfo descriptorLayout =
-			vkTools::initializers::descriptorSetLayoutCreateInfo(
-				setLayoutBindings.data(),
-				setLayoutBindings.size());
+		VkDescriptorSetLayoutCreateInfo descriptorLayout = {};
+		descriptorLayout.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+		descriptorLayout.pNext = NULL;
+		descriptorLayout.bindingCount = 1;
+		descriptorLayout.pBindings = &layoutBinding;
 
-		VkResult err = vkCreateDescriptorSetLayout(device, &descriptorLayout, nullptr, &descriptorSetLayout);
+		VkResult err = vkCreateDescriptorSetLayout(device, &descriptorLayout, NULL, &descriptorSetLayout);
 		assert(!err);
 
-		VkPipelineLayoutCreateInfo pPipelineLayoutCreateInfo =
-			vkTools::initializers::pipelineLayoutCreateInfo(
-				&descriptorSetLayout,
-				1);
+		VkPipelineLayoutCreateInfo pPipelineLayoutCreateInfo = {};
+		pPipelineLayoutCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+		pPipelineLayoutCreateInfo.pNext = NULL;
+		pPipelineLayoutCreateInfo.setLayoutCount = 1;
+		pPipelineLayoutCreateInfo.pSetLayouts = &descriptorSetLayout;
 
 		err = vkCreatePipelineLayout(device, &pPipelineLayoutCreateInfo, nullptr, &pipelineLayout);
 		assert(!err);
@@ -739,25 +739,30 @@ struct VulkanExample
 
 	void setupDescriptorSet()
 	{
-		VkDescriptorSetAllocateInfo allocInfo =
-			vkTools::initializers::descriptorSetAllocateInfo(
-				descriptorPool,
-				&descriptorSetLayout,
-				1);
+		// Update descriptor sets determining the shader binding points
+		// For every binding point used in a shader there needs to be one
+		// descriptor set matching that binding point
+		VkWriteDescriptorSet writeDescriptorSet = {};
+
+		VkDescriptorSetAllocateInfo allocInfo = {};
+		allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+		allocInfo.descriptorPool = descriptorPool;
+		allocInfo.descriptorSetCount = 1;
+		allocInfo.pSetLayouts = &descriptorSetLayout;
 
 		VkResult vkRes = vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet);
 		assert(!vkRes);
 
-		std::vector<VkWriteDescriptorSet> writeDescriptorSets;
-		writeDescriptorSets.push_back(
-			// Binding 0 : Vertex shader uniform buffer
-			vkTools::initializers::writeDescriptorSet(
-				descriptorSet,
-				VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-				0,
-				&uniformDataVS.descriptor));
+		// Binding 0 : Uniform buffer
+		writeDescriptorSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+		writeDescriptorSet.dstSet = descriptorSet;
+		writeDescriptorSet.descriptorCount = 1;
+		writeDescriptorSet.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+		writeDescriptorSet.pBufferInfo = &uniformDataVS.descriptor;
+		// Binds this uniform buffer to binding point 0
+		writeDescriptorSet.dstBinding = 0;
 
-		vkUpdateDescriptorSets(device, writeDescriptorSets.size(), writeDescriptorSets.data(), 0, NULL);
+		vkUpdateDescriptorSets(device, 1, &writeDescriptorSet, 0, NULL);
 	}
 
 	void setupDepthStencil()
@@ -997,27 +1002,24 @@ struct VulkanExample
 	void draw()
 	{
 		VkResult err;
-		VkSemaphore presentCompleteSemaphore;
-		VkSemaphoreCreateInfo presentCompleteSemaphoreCreateInfo = {};
-		presentCompleteSemaphoreCreateInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-		presentCompleteSemaphoreCreateInfo.pNext = NULL;
-
-		err = vkCreateSemaphore(device, &presentCompleteSemaphoreCreateInfo, nullptr, &presentCompleteSemaphore);
-		assert(!err);
 
 		// Get next image in the swap chain (back/front buffer)
-		err = swapChain.acquireNextImage(presentCompleteSemaphore, &currentBuffer);
+		err = swapChain.acquireNextImage(semaphores.presentComplete, &currentBuffer);
 		assert(!err);
 
 		// The submit infor strcuture contains a list of
 		// command buffers and semaphores to be submitted to a queue
 		// If you want to submit multiple command buffers, pass an array
+		VkPipelineStageFlags pipelineStages = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
 		VkSubmitInfo submitInfo = {};
 		submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
 		submitInfo.waitSemaphoreCount = 1;
-		submitInfo.pWaitSemaphores = &presentCompleteSemaphore;
+		submitInfo.pWaitSemaphores = &semaphores.presentComplete;
 		submitInfo.commandBufferCount = 1;
 		submitInfo.pCommandBuffers = &drawCmdBuffers[currentBuffer];
+		submitInfo.pWaitDstStageMask = &pipelineStages;
+		submitInfo.signalSemaphoreCount = 1;
+		submitInfo.pSignalSemaphores = &semaphores.submitSignal;
 
 		// Submit to the graphics queue
 		err = vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
@@ -1025,10 +1027,8 @@ struct VulkanExample
 
 		// Present the current buffer to the swap chain
 		// This will display the image
-		err = swapChain.queuePresent(queue, currentBuffer);
+		err = swapChain.queuePresent(queue, currentBuffer, semaphores.submitSignal);
 		assert(!err);
-
-		vkDestroySemaphore(device, presentCompleteSemaphore, nullptr);
 
 		// Add a post present image memory barrier
 		// This will transform the frame buffer color attachment back
@@ -1084,10 +1084,10 @@ struct VulkanExample
 
 };
 
-static int32_t handleInput(struct android_app* app, AInputEvent* event)
+static int32_t handleInput(struct android_app* app, AInputEvent* event) 
 {
 	struct VulkanExample* vulkanExample = (struct VulkanExample*)app->userData;
-	if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION)
+	if (AInputEvent_getType(event) == AINPUT_EVENT_TYPE_MOTION) 
 	{
 		// todo
 		return 1;
@@ -1137,16 +1137,16 @@ void android_main(struct android_app* state)
 
 	// loop waiting for stuff to do.
 
-	while (1)
+	while (1) 
 	{
 		// Read all pending events.
 		int ident;
 		int events;
 		struct android_poll_source* source;
 
-		while ((ident = ALooper_pollAll(engine->animating ? 0 : -1, NULL, &events, (void**)&source)) >= 0)
+		while ((ident = ALooper_pollAll(engine->animating ? 0 : -1, NULL, &events, (void**)&source)) >= 0) 
 		{
-			if (source != NULL)
+			if (source != NULL) 
 			{
 				source->process(state, source);
 			}
@@ -1161,10 +1161,12 @@ void android_main(struct android_app* state)
 		// Render frame
 		if (engine->prepared)
 		{
+			auto tStart = std::chrono::high_resolution_clock::now();
+
 			if (engine->animating)
-			{ 
+			{
 				// Update rotation
-				engine->state.rotation.y += 0.25f;
+				engine->state.rotation.y += engine->frameTimer * 0.1f;
 				if (engine->state.rotation.y > 360.0f)
 				{
 					engine->state.rotation.y -= 360.0f;
@@ -1173,6 +1175,12 @@ void android_main(struct android_app* state)
 				engine->updateUniformBuffers();
 			}
 			engine->draw();
+
+			auto tEnd = std::chrono::high_resolution_clock::now();
+			auto tDiff = std::chrono::duration<double, std::milli>(tEnd - tStart).count();
+
+			engine->frameTimer = (float)tDiff;
+
 		}
 	}
 }

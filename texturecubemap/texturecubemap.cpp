@@ -13,6 +13,7 @@
 #include <vector>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -126,6 +127,7 @@ public:
 		imageCreateInfo.tiling = VK_IMAGE_TILING_LINEAR;
 		imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 		imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
 		imageCreateInfo.flags = 0;
 
 		VkMemoryAllocateInfo memAllocInfo = vkTools::initializers::memoryAllocateInfo();
@@ -185,7 +187,7 @@ public:
 				cmdBuffer,
 				cubeFace[face].image,
 				VK_IMAGE_ASPECT_COLOR_BIT,
-				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_PREINITIALIZED,
 				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 		}
 		
@@ -212,12 +214,21 @@ public:
 
 		// Image barrier for optimal image (target)
 		// Optimal image will be used as destination for the copy
+
+		// Set initial layout for all array layers of the optimal (target) tiled texture
+		VkImageSubresourceRange subresourceRange = {};
+		subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		subresourceRange.baseMipLevel = 0;
+		subresourceRange.levelCount = 1;
+		subresourceRange.layerCount = 6;
+
 		vkTools::setImageLayout(
 			cmdBuffer,
 			cubeMap.image,
 			VK_IMAGE_ASPECT_COLOR_BIT,
-			VK_IMAGE_LAYOUT_UNDEFINED,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+			VK_IMAGE_LAYOUT_PREINITIALIZED,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			subresourceRange);
 
 		// Copy cube map faces one by one
 		for (uint32_t face = 0; face < 6; ++face)
@@ -244,19 +255,22 @@ public:
 			// Put image copy into command buffer
 			vkCmdCopyImage(
 				cmdBuffer,
-				cubeFace[face].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-				cubeMap.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-				1, &copyRegion);
-
-			// Change texture image layout to shader read after the copy
-			cubeMap.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			vkTools::setImageLayout(
-				cmdBuffer,
-				cubeMap.image,
-				VK_IMAGE_ASPECT_COLOR_BIT,
+				cubeFace[face].image, 
+				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+				cubeMap.image, 
 				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-				cubeMap.imageLayout);
+				1, &copyRegion);
 		}
+
+		// Change texture image layout to shader read after all faces have been copied
+		cubeMap.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		vkTools::setImageLayout(
+			cmdBuffer,
+			cubeMap.image,
+			VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			cubeMap.imageLayout,
+			subresourceRange);
 
 		err = vkEndCommandBuffer(cmdBuffer);
 		assert(!err);
@@ -670,14 +684,14 @@ public:
 	{
 		// 3D object
 		glm::mat4 viewMatrix = glm::mat4();
-		uboVS.projection = glm::perspective(deg_to_rad(60.0f), (float)width / (float)height, 0.001f, 256.0f);
+		uboVS.projection = glm::perspective(glm::radians(60.0f), (float)width / (float)height, 0.001f, 256.0f);
 		viewMatrix = glm::translate(viewMatrix, glm::vec3(0.0f, 0.0f, zoom));
 
 		uboVS.model = glm::mat4();
 		uboVS.model = viewMatrix * glm::translate(uboVS.model, glm::vec3(0, 0, 0));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		uint8_t *pData;
 		VkResult err = vkMapMemory(device, uniformData.objectVS.memory, 0, sizeof(uboVS), 0, (void **)&pData);
@@ -687,13 +701,13 @@ public:
 
 		// Skysphere
 		viewMatrix = glm::mat4();
-		uboVS.projection = glm::perspective(deg_to_rad(60.0f), (float)width / (float)height, 0.001f, 256.0f);
+		uboVS.projection = glm::perspective(glm::radians(60.0f), (float)width / (float)height, 0.001f, 256.0f);
 
 		uboVS.model = glm::mat4();
 		uboVS.model = viewMatrix * glm::translate(uboVS.model, glm::vec3(0, 0, 0));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		err = vkMapMemory(device, uniformData.skyboxVS.memory, 0, sizeof(uboVS), 0, (void **)&pData);
 		assert(!err);

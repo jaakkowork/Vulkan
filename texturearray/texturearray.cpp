@@ -14,6 +14,7 @@
 #include <vector>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -134,6 +135,7 @@ public:
 		imageCreateInfo.tiling = VK_IMAGE_TILING_LINEAR;
 		imageCreateInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 		imageCreateInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+		imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_PREINITIALIZED;
 		imageCreateInfo.flags = 0;
 
 		VkMemoryAllocateInfo memAllocInfo = vkTools::initializers::memoryAllocateInfo();
@@ -156,7 +158,7 @@ public:
 		err = vkAllocateCommandBuffers(device, &cmdBufAlllocatInfo, &cmdBuffer);
 		assert(!err);
 
-		VkCommandBufferBeginInfo cmdBufInfo = 
+		VkCommandBufferBeginInfo cmdBufInfo =
 			vkTools::initializers::commandBufferBeginInfo();
 
 		err = vkBeginCommandBuffer(cmdBuffer, &cmdBufInfo);
@@ -195,7 +197,7 @@ public:
 				cmdBuffer,
 				arrayLayer[i].image,
 				VK_IMAGE_ASPECT_COLOR_BIT,
-				VK_IMAGE_LAYOUT_UNDEFINED,
+				VK_IMAGE_LAYOUT_PREINITIALIZED,
 				VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 		}
 
@@ -220,13 +222,20 @@ public:
 		assert(!err);
 
 		// Image barrier for optimal image (target)
-		// Optimal image will be used as destination for the copy
+		// Set initial layout for all array layers of the optimal (target) tiled texture
+		VkImageSubresourceRange subresourceRange = {};
+		subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+		subresourceRange.baseMipLevel = 0;
+		subresourceRange.levelCount = 1;
+		subresourceRange.layerCount = layerCount;
+
 		vkTools::setImageLayout(
 			cmdBuffer,
 			textureArray.image,
 			VK_IMAGE_ASPECT_COLOR_BIT,
-			VK_IMAGE_LAYOUT_UNDEFINED,
-			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+			VK_IMAGE_LAYOUT_PREINITIALIZED,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			subresourceRange);
 
 		// Copy cube map faces one by one
 		for (uint32_t i = 0; i < layerCount; ++i)
@@ -256,16 +265,17 @@ public:
 				arrayLayer[i].image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
 				textureArray.image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
 				1, &copyRegion);
-
-			// Change texture image layout to shader read after the copy
-			textureArray.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-			vkTools::setImageLayout(
-				cmdBuffer,
-				textureArray.image,
-				VK_IMAGE_ASPECT_COLOR_BIT,
-				VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-				textureArray.imageLayout);
 		}
+
+		// Change texture image layout to shader read after all layers have been copied
+		textureArray.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+		vkTools::setImageLayout(
+			cmdBuffer,
+			textureArray.image,
+			VK_IMAGE_ASPECT_COLOR_BIT,
+			VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+			textureArray.imageLayout,
+			subresourceRange);
 
 		err = vkEndCommandBuffer(cmdBuffer);
 		assert(!err);
@@ -667,7 +677,7 @@ public:
 		{
 			// Instance model matrix
 			uboVS.instance[i].model = glm::translate(glm::mat4(), glm::vec3(0.0f, i * offset - center, 0.0f));
-			uboVS.instance[i].model = glm::rotate(uboVS.instance[i].model, deg_to_rad(60.0f), glm::vec3(1.0f, 0.0f, 0.0f));
+			uboVS.instance[i].model = glm::rotate(uboVS.instance[i].model, glm::radians(60.0f), glm::vec3(1.0f, 0.0f, 0.0f));
 			// Instance texture array index
 			uboVS.instance[i].arrayIndex.x = i;
 		}
@@ -689,13 +699,13 @@ public:
 		// Only updates the uniform buffer block part containing the global matrices
 
 		// Projection
-		uboVS.matrices.projection = glm::perspective(deg_to_rad(60.0f), (float)width / (float)height, 0.001f, 256.0f);
+		uboVS.matrices.projection = glm::perspective(glm::radians(60.0f), (float)width / (float)height, 0.001f, 256.0f);
 
 		// View
 		uboVS.matrices.view = glm::translate(glm::mat4(), glm::vec3(0.0f, -1.0f, zoom));
-		uboVS.matrices.view = glm::rotate(uboVS.matrices.view, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		uboVS.matrices.view = glm::rotate(uboVS.matrices.view, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		uboVS.matrices.view = glm::rotate(uboVS.matrices.view, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		uboVS.matrices.view = glm::rotate(uboVS.matrices.view, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		uboVS.matrices.view = glm::rotate(uboVS.matrices.view, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		uboVS.matrices.view = glm::rotate(uboVS.matrices.view, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		// Only update the matrices part of the uniform buffer
 		uint8_t *pData;

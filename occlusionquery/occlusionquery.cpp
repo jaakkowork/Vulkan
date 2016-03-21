@@ -13,6 +13,7 @@
 #include <vector>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -619,13 +620,13 @@ public:
 	{
 		// Vertex shader
 		glm::mat4 viewMatrix = glm::mat4();
-		uboVS.projection = glm::perspective(deg_to_rad(60.0f), (float)width / (float)height, 0.1f, 256.0f);
+		uboVS.projection = glm::perspective(glm::radians(60.0f), (float)width / (float)height, 0.1f, 256.0f);
 		viewMatrix = glm::translate(viewMatrix, glm::vec3(0.0f, 0.0f, zoom));
 
 		glm::mat4 rotMatrix = glm::mat4();
-		rotMatrix = glm::rotate(rotMatrix, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		rotMatrix = glm::rotate(rotMatrix, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		rotMatrix = glm::rotate(rotMatrix, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		rotMatrix = glm::rotate(rotMatrix, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		rotMatrix = glm::rotate(rotMatrix, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		rotMatrix = glm::rotate(rotMatrix, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		uboVS.model = glm::mat4();
 		uboVS.model = viewMatrix * rotMatrix;;

@@ -17,6 +17,7 @@
 #include <array>
 
 #define GLM_FORCE_RADIANS
+#define GLM_FORCE_DEPTH_ZERO_TO_ONE
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -63,9 +64,6 @@ void parsebmFont()
 
 	std::ifstream fstream(filename);
 	assert(fstream.good());
-
-	// todo : from texture
-	const uint32_t texdim = 512;
 
 	while (!fstream.eof())
 	{
@@ -152,7 +150,7 @@ public:
 
 	VulkanExample() : VulkanExampleBase(ENABLE_VALIDATION)
 	{
-		zoom = -1.0f;
+		zoom = -1.5f;
 		rotation = { 0.0f, 0.0f, 0.0f };
 		title = "Vulkan Example - Distance field fonts";
 	}
@@ -303,25 +301,12 @@ public:
 
 	// todo : function fill buffer with quads from font
 
-	void generateQuad()
+	// Creates a vertex buffer containing quads for the passed text
+	void generateText(std:: string text)
 	{
-		// Setup vertices for a single uv-mapped quad
-		/*
-#define dim 1.0f
-		std::vector<Vertex> vertexBuffer =
-		{
-			{ { dim,  dim, 0.0f },{ 1.0f, 1.0f } },
-			{ { -dim,  dim, 0.0f },{ 0.0f, 1.0f } },
-			{ { -dim, -dim, 0.0f },{ 0.0f, 0.0f } },
-			{ { dim, -dim, 0.0f },{ 1.0f, 0.0f } }
-		};
-#undef dim
-*/
 		std::vector<Vertex> vertexBuffer;
 		std::vector<uint32_t> indexBuffer;
 		uint32_t indexOffset = 0;
-
-		std::string text = "Vulkan";
 
 		float w = textures.fontSDF.width;
 
@@ -364,6 +349,7 @@ public:
 			float advance = ((float)(charInfo->xadvance) / 36.0f);
 			posx += advance;
 		}
+		indices.count = indexBuffer.size();
 
 		// Center
 		for (auto& v : vertexBuffer)
@@ -372,33 +358,12 @@ public:
 			v.pos[1] -= 0.5f;
 		}
 
-		/*
-#define dim 1.0f
-		int charId = 'V';
-		float w = textures.fontSDF.width;
-		float sstart = fontChars[charId].x / w;
-		float send = (fontChars[charId].x + fontChars[charId].width) / w;
-		float tstart = fontChars[charId].y / w;
-		float tend = (fontChars[charId].y + fontChars[charId].height) / w;
-		std::vector<Vertex> vertexBuffer =
-		{
-			{ {  dim,  dim, 0.0f },{ send, tend } },
-			{ { -dim,  dim, 0.0f },{ sstart, tend } },
-			{ { -dim, -dim, 0.0f },{ sstart, tstart } },
-			{ {  dim, -dim, 0.0f },{ send, tstart } }
-		};
-#undef dim
-*/
 		createBuffer(
 			VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
 			vertexBuffer.size() * sizeof(Vertex),
 			vertexBuffer.data(),
 			&vertices.buf,
 			&vertices.mem);
-
-		// Setup indices
-	//	std::vector<uint32_t> indexBuffer = { 0,1,2, 2,3,0 };
-		indices.count = indexBuffer.size();
 
 		createBuffer(
 			VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
@@ -688,14 +653,14 @@ public:
 	{
 		// Vertex shader
 		glm::mat4 viewMatrix = glm::mat4();
-		uboVS.projection = glm::perspective(deg_to_rad(splitScreen ? 45.0f : 60.0f), (float)width / (float)(height * ((splitScreen) ? 0.5f : 1.0f)), 0.001f, 256.0f);
-		viewMatrix = glm::translate(viewMatrix, glm::vec3(0.0f, 0.0f, zoom));
+		uboVS.projection = glm::perspective(glm::radians(splitScreen ? 45.0f : 45.0f), (float)width / (float)(height * ((splitScreen) ? 0.5f : 1.0f)), 0.001f, 256.0f);
+		viewMatrix = glm::translate(viewMatrix, glm::vec3(0.0f, 0.0f, splitScreen ? zoom : zoom - 2.0f));
 
 		uboVS.model = glm::mat4();
 		uboVS.model = viewMatrix * glm::translate(uboVS.model, glm::vec3(0, 0, 0));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
-		uboVS.model = glm::rotate(uboVS.model, deg_to_rad(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.x), glm::vec3(1.0f, 0.0f, 0.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.y), glm::vec3(0.0f, 1.0f, 0.0f));
+		uboVS.model = glm::rotate(uboVS.model, glm::radians(rotation.z), glm::vec3(0.0f, 0.0f, 1.0f));
 
 		uint8_t *pData;
 		VkResult err = vkMapMemory(device, uniformData.vs.memory, 0, sizeof(uboVS), 0, (void **)&pData);
@@ -719,7 +684,7 @@ public:
 		VulkanExampleBase::prepare();
 		parsebmFont();
 		loadTextures();
-		generateQuad();
+		generateText("Vulkan");
 		setupVertexDescriptions();
 		prepareUniformBuffers();
 		setupDescriptorSetLayout();
